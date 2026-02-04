@@ -1,10 +1,10 @@
-# ADR 0001: FDE Architecture Design Options (v0.01 - Option 3)
+# ADR 0001: FDE Architecture Design Options (v0.01)
 
 ## Status
 Proposed
 
 ## Context
-This ADR captures the initial architecture design notes and options for the TTSA-ITA Federal Data Exchange (FDE) adapters through Option 3 (v0.01).
+This ADR captures the initial architecture design notes and options for the TTSA-ITA Federal Data Exchange (FDE) adapters through Option 4 (v0.01).
 
 ### Overview
 
@@ -124,7 +124,27 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Non-functional: can meet security/observability requirements, but requires added operational controls and ATO work for Mage.
   - Scaling model: helps scale source extraction within adapters; does not remove the need for standard interfaces and registry/discovery.
 
-#### Option 3: Minimal Microservices POC (Fastest v0.01)
+#### Option 3: Mage AI Deployed Per-Agency (Maximize Connector and Pipeline Capabilities)
+
+- Description: Each agency runs Mage (or a Mage worker/runtime) inside its own boundary to execute connectors and pipelines close to the data; a central service (Mage or non-Mage control-plane) coordinates scheduling/requests and aggregates run status.
+- Mage usage:
+  - Mage runs inside each agency boundary and is used for its primary strengths: connectors, pipeline runtime, and per-source extraction orchestration.
+  - This option assumes agencies are willing to host and operate Mage (or a compatible worker) where the data lives.
+- How it works:
+  - A central control-plane schedules or triggers runs and calls an agency-local job trigger endpoint.
+  - The agency-local Mage instance executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
+  - The agency-local adapter wrapper (or a standard Mage block) packages/compresses/encrypts and transfers the payload using the FDE protocol.
+- Control-plane boundary:
+  - Authorization (Access Validation/DSA checks) remains authoritative before any extraction; central orchestration only triggers agency-local work after approval.
+- Pros & Cons:
+  - Pros: strongest use of Mage connectors/pipeline runtime; fastest path to integrate many heterogeneous sources when each agency owns its connector configuration.
+  - Cons: operational overhead to deploy/operate Mage in many environments; increased ATO surface area per agency; requires consistent packaging/transfer semantics so pipelines do not drift.
+- Requirements fit:
+  - Functional: strong coverage for source connectivity and extraction; still requires the FDE request/authorization/transfer contract to be implemented consistently.
+  - Non-functional: can be production-capable when paired with robust transfer backend and standardized observability, but requires multi-tenant ops controls.
+  - Scaling model: scales source extraction across many agencies, but increases platform operations burden (registry, versioning, and rollout governance become critical).
+
+#### Option 4: Minimal Microservices POC (Fastest v0.01)
 
 - Description: Two lightweight services that implement key exchange + gzip/encrypt + return payload.
 - How it works (v0.01):
@@ -144,7 +164,7 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Scaling model: acceptable for two-adapter prototype; will require evolution to standard interfaces, registry, and robust transfer semantics.
 
 ## Decision
-Adopt this ADR as the initial captured set of architecture options through v0.01 / Option 3 for review.
+Adopt this ADR as the initial captured set of architecture options through v0.01 / Option 4 for review.
 
 ## Consequences
 - Enables review/iteration of the options within the implementation repository.
