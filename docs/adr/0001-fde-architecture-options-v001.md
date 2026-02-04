@@ -14,7 +14,7 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 
 ### Goals
 
-- Deliver a working prototype of two interchangeable adapters (each can act as sender or receiver) prior to March.
+- Deliver a working prototype of two interchangeable adapters (each can act as sender or receiver).
 - Support secure data movement across different networks over the public internet (assume HTTPS/443) with encryption using per-request ephemeral keys.
 - Provide an internal adapter structure that is extensible to many data sources and can support full refresh and delta-based transfers over time.
 - Prefer AWS-native components where possible to reduce ATO overhead, while keeping the design portable for agencies that are not AWS-based.
@@ -61,7 +61,7 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 - Each agency (and sometimes multiple systems within an agency) may run one or more adapter instances.
 - The system must support a growing number of adapters by using standard interfaces, rather than building a separate integration for each adapter pair.
 - A scalable approach is to use a shared contract (FDE request + authorization + transfer protocol) and a pluggable connector mechanism for source-specific extraction.
-  - Shared contract:
+  - Shared contract (Per Datasource):
     - Standard request schema (dataset identifier, time range, parameters, response packaging expectations).
     - Standard authorization artifact (POC: static/manual trust; later: policy-based access validation).
     - Standard transfer semantics (encryption/compression, manifest/checksums, status/error reporting).
@@ -77,11 +77,12 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 
 ### Architecture options (summary)
 
-#### Option 1: AWS-Native Adapter Service (Recommended target state)
+#### Option 1: AWS-Native Adapter Service
 
 [Diagrams (Mermaid): ADR 0001 Option 1 flow](./0001-fde-architecture-diagrams.md)
 
 - Compute: ECS/Fargate (or EKS)
+  - Container model: both sender and receiver adapters are deployed as containerized services (container-first packaging).
 - Transfer: encrypted artifact handoff via S3 (multipart uploads) + manifest
   - Sender extracts data from the source system, packages it as one or more files, then encrypts the payload using the receiver public key.
   - Sender uploads the encrypted payload to S3 (multipart upload when large) to support reliable transfers and retries for GB-scale artifacts.
@@ -94,7 +95,7 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Enables tracking and auditing of transfer status (useful for operators and for governance integration).
 - Pros & Cons:
   - Pros: ATO-friendly AWS-native primitives; strong support for GB-scale transfers; clear production evolution path.
-  - Cons: assumes AWS services for the transfer backend (S3/Step Functions); non-AWS agency environments would need an equivalent object storage service (e.g., S3-compatible MinIO/Ceph, Azure Blob Storage, Google Cloud Storage) or an alternate transport backend (e.g., SFTP or HTTPS streaming) to implement the same artifact handoff pattern.
+  - Cons: assumes AWS services for the transfer backend (S3/Step Functions); non-AWS agency environments would need an equivalent object storage service (e.g., S3-compatible MinIO/Ceph, Azure Blob Storage, Google Cloud Storage) or an alternate transport backend (e.g., SFTP or S3 pre-signed url) to implement the same artifact handoff pattern.
 - Requirements fit:
   - Functional: supports sender/receiver interchangeability, key exchange, and batch transfer patterns.
   - Non-functional: best support for GB-scale reliability (object handoff + retry/resume), observability, and operational hardening.

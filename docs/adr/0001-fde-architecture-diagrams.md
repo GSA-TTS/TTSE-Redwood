@@ -1,6 +1,6 @@
 # ADR 0001 Diagrams: FDE Architecture Options
 
-## Option 1 (Case A): FDE Transfer Flow (Receiver-initiated)
+## Option 1: AWS-Native Adapter Service
 
 ### Sequence diagram
 
