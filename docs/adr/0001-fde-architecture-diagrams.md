@@ -130,8 +130,7 @@ sequenceDiagram
   participant R as Receiver Adapter (Requestor)
   participant AV as Access Validation / Agreement Store
   participant CP as Central Control-plane Scheduler
-  participant Mg as Agency-Local Mage Runtime
-  participant A as Agency-Local Adapter Wrapper
+  participant A as Agency-Local FDE Adapter (Mage-enabled)
   participant T as Transfer Backend (e.g., S3 Handoff)
   participant D as Databricks Landing (or downstream)
 
@@ -141,9 +140,8 @@ sequenceDiagram
 
   alt Authorized
     R->>CP: Submit authorized request + receiver public key
-    CP->>Mg: Trigger agency-local pipeline run (HTTPS)
-    Mg->>Mg: Execute connectors/pipeline to extract data
-    Mg->>A: Hand off extracted data/artifacts for packaging
+    CP->>A: Trigger agency-local adapter run (HTTPS)
+    A->>A: Execute extraction pipeline using embedded Mage connectors
     A->>A: Compress (gzip) + Encrypt to receiver public key
     A->>T: Upload encrypted artifact(s) + manifest
     CP->>CP: Track run status/metadata
@@ -166,8 +164,7 @@ flowchart LR
   end
 
   subgraph AgencyBoundary[Agency boundary]
-    Mg3["Mage Runtime (Agency-local)"]
-    A3["Adapter Wrapper (FDE packaging and transfer)"]
+    A3["FDE Adapter (Mage-enabled extraction and FDE transfer)"]
     SRC3[(Agency Data Source)]
   end
 
@@ -180,9 +177,8 @@ flowchart LR
 
   R3 --> AV3
   AV3 --> CP3
-  CP3 --> Mg3
-  Mg3 --> SRC3
-  Mg3 --> A3
+  CP3 --> A3
+  A3 --> SRC3
   A3 --> T3
   R3 --> T3
   R3 --> DBX3

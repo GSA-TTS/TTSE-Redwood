@@ -127,14 +127,14 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 
 #### Option 3: Mage AI Deployed Per-Agency (Maximize Connector and Pipeline Capabilities)
 
-- Description: Each agency runs Mage (or a Mage worker/runtime) inside its own boundary to execute connectors and pipelines close to the data; a central service (Mage or non-Mage control-plane) coordinates scheduling/requests and aggregates run status.
+- Description: Each agency runs the FDE adapter as a single deployable unit; Mage capabilities are embedded within the adapter runtime to execute connectors and pipelines close to the data. A central service (Mage or non-Mage control-plane) coordinates scheduling/requests and aggregates run status.
 - Mage usage:
-  - Mage runs inside each agency boundary and is used for its primary strengths: connectors, pipeline runtime, and per-source extraction orchestration.
-  - This option assumes agencies are willing to host and operate Mage (or a compatible worker) where the data lives.
+  - Mage connectors and pipeline runtime are embedded in the agency-local FDE adapter (no separate Mage service/UI is required per agency).
+  - This option assumes agencies are willing to run the FDE adapter container with Mage-enabled extraction capabilities where the data lives.
 - How it works:
-  - A central control-plane schedules or triggers runs and calls an agency-local job trigger endpoint.
-  - The agency-local Mage instance executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
-  - The agency-local adapter wrapper (or a standard Mage block) packages/compresses/encrypts and transfers the payload using the FDE protocol.
+  - A central control-plane schedules or triggers runs and calls an agency-local adapter job trigger endpoint.
+  - The agency-local FDE adapter executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
+  - The same agency-local FDE adapter packages/compresses/encrypts and transfers the payload using the FDE protocol.
 - Control-plane boundary:
   - Authorization (Access Validation/DSA checks) remains authoritative before any extraction; central orchestration only triggers agency-local work after approval.
 - Pros & Cons:
