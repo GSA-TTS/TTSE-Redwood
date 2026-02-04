@@ -183,3 +183,41 @@ flowchart LR
   R --> T
   R --> DBX
 ```
+
+## Option 4: Minimal Microservices POC (Fastest v0.01)
+
+### Sequence diagram
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant R as Receiver (Minimal Service)
+  participant S as Sender (Minimal Service)
+  participant SRC as Source System
+  participant D as Databricks Landing (or downstream)
+
+  R->>R: Generate ephemeral keypair (keep private key)
+  R->>S: Data request + receiver public key
+  S->>SRC: Fetch or query requested data
+  S->>S: Compress (gzip) + Encrypt to receiver public key
+  S-->>R: Transfer encrypted payload (direct HTTPS upload or response)
+  R->>R: Decrypt with ephemeral private key
+  R->>D: Land decrypted data
+```
+
+### Component diagram
+
+```mermaid
+flowchart LR
+  subgraph DataPlane[Data-plane]
+    R4[Receiver Minimal Service]
+    S4[Sender Minimal Service]
+    SRC4[(Source System)]
+    DBX4[(Databricks Landing)]
+  end
+
+  R4 -->|Request + receiver public key| S4
+  S4 -->|Extract| SRC4
+  S4 -->|Encrypt + Transfer HTTPS| R4
+  R4 -->|Decrypt + Land| DBX4
+```
