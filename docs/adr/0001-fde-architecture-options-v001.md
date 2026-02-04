@@ -101,7 +101,27 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Non-functional: best support for GB-scale reliability (object handoff + retry/resume), observability, and operational hardening.
   - Scaling model: aligns with control-plane/data-plane split; supports standardized interfaces and centralized discovery/registry.
 
-#### Option 2: Mage AI as Connector Runtime + Adapter Security Wrapper
+#### Option 2: Mage AI Embedded in Agency-Local FDE Adapter (Maximize Connector and Pipeline Capabilities)
+
+- Description: Each agency runs the FDE adapter as a single deployable unit; Mage capabilities are embedded within the adapter runtime to execute connectors and pipelines close to the data. A central service (Mage or non-Mage control-plane) coordinates scheduling/requests and aggregates run status.
+- Mage usage:
+  - Mage connectors and pipeline runtime are embedded in the agency-local FDE adapter (no separate Mage service/UI is required per agency).
+  - This option assumes agencies are willing to run the FDE adapter container with Mage-enabled extraction capabilities where the data lives.
+- How it works:
+  - A central control-plane schedules or triggers runs and calls an agency-local adapter job trigger endpoint.
+  - The agency-local FDE adapter executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
+  - The same agency-local FDE adapter packages/compresses/encrypts and transfers the payload using the FDE protocol.
+- Control-plane boundary:
+  - Authorization (Access Validation/DSA checks) remains authoritative before any extraction; central orchestration only triggers agency-local work after approval.
+- Pros & Cons:
+  - Pros: strongest use of Mage connectors/pipeline runtime; fastest path to integrate many heterogeneous sources when each agency owns its connector configuration.
+  - Cons: operational overhead to deploy/operate Mage in many environments; increased ATO surface area per agency; requires consistent packaging/transfer semantics so pipelines do not drift.
+- Requirements fit:
+  - Functional: strong coverage for source connectivity and extraction; still requires the FDE request/authorization/transfer contract to be implemented consistently.
+  - Non-functional: can be production-capable when paired with robust transfer backend and standardized observability, but requires multi-tenant ops controls.
+  - Scaling model: scales source extraction across many agencies, but increases platform operations burden (registry, versioning, and rollout governance become critical).
+
+#### Option 3: Mage AI as Connector Runtime + Adapter Security Wrapper
 
 - Description: Mage (central, GSA-operated) orchestrates extraction jobs; agency-local adapters execute source extraction and implement the FDE request/authorization/encryption/transfer protocol.
 - Note: Safer approach: Run Mage centrally for scheduling/monitoring, but perform data extraction inside each agency via its local adapter (so GSA does not need direct network/credential access to agency data stores).
@@ -124,26 +144,6 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Functional: strong coverage for source connectivity via connectors; adapter wrapper must still implement request/authorization/transfer.
   - Non-functional: can meet security/observability requirements, but requires added operational controls and ATO work for Mage.
   - Scaling model: helps scale source extraction within adapters; does not remove the need for standard interfaces and registry/discovery.
-
-#### Option 3: Mage AI Deployed Per-Agency (Maximize Connector and Pipeline Capabilities)
-
-- Description: Each agency runs the FDE adapter as a single deployable unit; Mage capabilities are embedded within the adapter runtime to execute connectors and pipelines close to the data. A central service (Mage or non-Mage control-plane) coordinates scheduling/requests and aggregates run status.
-- Mage usage:
-  - Mage connectors and pipeline runtime are embedded in the agency-local FDE adapter (no separate Mage service/UI is required per agency).
-  - This option assumes agencies are willing to run the FDE adapter container with Mage-enabled extraction capabilities where the data lives.
-- How it works:
-  - A central control-plane schedules or triggers runs and calls an agency-local adapter job trigger endpoint.
-  - The agency-local FDE adapter executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
-  - The same agency-local FDE adapter packages/compresses/encrypts and transfers the payload using the FDE protocol.
-- Control-plane boundary:
-  - Authorization (Access Validation/DSA checks) remains authoritative before any extraction; central orchestration only triggers agency-local work after approval.
-- Pros & Cons:
-  - Pros: strongest use of Mage connectors/pipeline runtime; fastest path to integrate many heterogeneous sources when each agency owns its connector configuration.
-  - Cons: operational overhead to deploy/operate Mage in many environments; increased ATO surface area per agency; requires consistent packaging/transfer semantics so pipelines do not drift.
-- Requirements fit:
-  - Functional: strong coverage for source connectivity and extraction; still requires the FDE request/authorization/transfer contract to be implemented consistently.
-  - Non-functional: can be production-capable when paired with robust transfer backend and standardized observability, but requires multi-tenant ops controls.
-  - Scaling model: scales source extraction across many agencies, but increases platform operations burden (registry, versioning, and rollout governance become critical).
 
 #### Option 4: Minimal Microservices POC (Fastest v0.01)
 

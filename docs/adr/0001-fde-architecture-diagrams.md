@@ -56,71 +56,7 @@ flowchart LR
   R -->|Decrypt + Land| DBX
 ```
 
-## Option 2: Mage AI as Orchestrator + Agency-Local Adapter Execution
-
-### Sequence diagram
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant R as Receiver Adapter (Requestor)
-  participant AV as Access Validation / Agreement Store
-  participant M as Mage (Central Scheduler/Monitor)
-  participant A as Agency-Local Adapter (Extraction + FDE Wrapper)
-  participant S3 as Transfer Backend (e.g., S3 Handoff)
-  participant D as Databricks Landing (or downstream)
-
-  R->>R: Generate ephemeral keypair (keep private key)
-  R->>AV: Request authorization for dataset + params
-  AV-->>R: Authorized (or Denied)
-
-  alt Authorized
-    R->>M: Submit authorized job request + receiver public key
-    M->>A: Trigger extraction job (HTTPS) + receiver public key
-    A->>A: Extract data from agency source system
-    A->>A: Compress (gzip) + Encrypt to receiver public key
-    A->>S3: Upload encrypted artifact(s) + manifest
-    M->>M: Track status/metadata (scheduling/monitoring)
-    R->>S3: Download manifest + encrypted artifact(s)
-    R->>R: Verify checksums/integrity
-    R->>R: Decrypt with ephemeral private key
-    R->>D: Land decrypted data
-  else Denied
-    AV-->>R: Denied / error response
-  end
-```
-
-### Component diagram
-
-```mermaid
-flowchart LR
-  subgraph ControlPlane[Control-plane]
-    AV[Access Validation / Agreement Store]
-    M["Mage: Central Scheduler and Monitor"]
-  end
- 
-  subgraph AgencyBoundary[Agency boundary]
-    A["Agency-Local Adapter: Connectors and FDE Wrapper"]
-    SRC[(Agency Data Source)]
-  end
- 
-  subgraph ReceiverSide[Receiver side]
-    R[Receiver Adapter]
-    DBX[(Databricks Landing)]
-  end
- 
-  T["Transfer Backend: S3 Handoff and Manifest"]
- 
-  R --> AV
-  AV --> M
-  M --> A
-  A --> SRC
-  A --> T
-  R --> T
-  R --> DBX
-```
-
-## Option 3: Mage AI Deployed Per-Agency (Maximize Connector and Pipeline Capabilities)
+## Option 2: Mage AI Embedded in Agency-Local FDE Adapter (Maximize Connector and Pipeline Capabilities)
 
 ### Sequence diagram
 
@@ -182,4 +118,68 @@ flowchart LR
   A3 --> T3
   R3 --> T3
   R3 --> DBX3
+```
+
+## Option 3: Mage AI as Orchestrator + Agency-Local Adapter Execution
+
+### Sequence diagram
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant R as Receiver Adapter (Requestor)
+  participant AV as Access Validation / Agreement Store
+  participant M as Mage (Central Scheduler/Monitor)
+  participant A as Agency-Local Adapter (Extraction + FDE Wrapper)
+  participant S3 as Transfer Backend (e.g., S3 Handoff)
+  participant D as Databricks Landing (or downstream)
+
+  R->>R: Generate ephemeral keypair (keep private key)
+  R->>AV: Request authorization for dataset + params
+  AV-->>R: Authorized (or Denied)
+
+  alt Authorized
+    R->>M: Submit authorized job request + receiver public key
+    M->>A: Trigger extraction job (HTTPS) + receiver public key
+    A->>A: Extract data from agency source system
+    A->>A: Compress (gzip) + Encrypt to receiver public key
+    A->>S3: Upload encrypted artifact(s) + manifest
+    M->>M: Track status/metadata (scheduling/monitoring)
+    R->>S3: Download manifest + encrypted artifact(s)
+    R->>R: Verify checksums/integrity
+    R->>R: Decrypt with ephemeral private key
+    R->>D: Land decrypted data
+  else Denied
+    AV-->>R: Denied / error response
+  end
+```
+
+### Component diagram
+
+```mermaid
+flowchart LR
+  subgraph ControlPlane[Control-plane]
+    AV[Access Validation / Agreement Store]
+    M["Mage: Central Scheduler and Monitor"]
+  end
+ 
+  subgraph AgencyBoundary[Agency boundary]
+    A["Agency-Local Adapter: Connectors and FDE Wrapper"]
+    SRC[(Agency Data Source)]
+  end
+ 
+  subgraph ReceiverSide[Receiver side]
+    R[Receiver Adapter]
+    DBX[(Databricks Landing)]
+  end
+ 
+  T["Transfer Backend: S3 Handoff and Manifest"]
+ 
+  R --> AV
+  AV --> M
+  M --> A
+  A --> SRC
+  A --> T
+  R --> T
+  R --> DBX
 ```
