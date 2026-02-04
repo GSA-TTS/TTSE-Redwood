@@ -120,7 +120,7 @@ flowchart LR
   R3 --> DBX3
 ```
 
-## Option 3: Mage AI as Orchestrator + Agency-Local Adapter Execution
+## Option 3: Mage AI as Control-plane Orchestrator + Adapter Security Wrapper
 
 ### Sequence diagram
 

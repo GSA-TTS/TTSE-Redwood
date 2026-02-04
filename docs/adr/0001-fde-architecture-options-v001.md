@@ -121,29 +121,24 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Non-functional: can be production-capable when paired with robust transfer backend and standardized observability, but requires multi-tenant ops controls.
   - Scaling model: scales source extraction across many agencies, but increases platform operations burden (registry, versioning, and rollout governance become critical).
 
-#### Option 3: Mage AI as Connector Runtime + Adapter Security Wrapper
+#### Option 3: Mage AI as Control-plane Orchestrator + Adapter Security Wrapper
 
-- Description: Mage (central, GSA-operated) orchestrates extraction jobs; agency-local adapters execute source extraction and implement the FDE request/authorization/encryption/transfer protocol.
-- Note: Safer approach: Run Mage centrally for scheduling/monitoring, but perform data extraction inside each agency via its local adapter (so GSA does not need direct network/credential access to agency data stores).
+- Description: Mage (central, GSA-operated) provides scheduling/monitoring and triggers extraction jobs; agency-local adapters execute extraction and implement the FDE request/authorization/encryption/transfer protocol. Source connectivity stays within each agency boundary (agency-owned credentials and network access).
 - How it works:
   - Mage triggers an agency adapter job via a standard interface (e.g., HTTPS job trigger endpoint) and tracks run status.
-  - The agency adapter runs the extraction connector locally, then packages/encrypts/transfers the payload using the FDE protocol.
+  - The agency adapter runs the extraction logic locally (using adapter-native connectors), then packages/encrypts/transfers the payload using the FDE protocol.
 - Control-plane boundary:
-  - Access Validation/DSA checks remain authoritative for authorization; Mage orchestrates execution after requests are authorized.
+  - Access Validation/DSA checks remain authoritative for authorization; Mage orchestrates execution after requests are authorized, without requiring direct network/credential access to agency data stores.
 - Connector location:
-  - Source connectors run inside the agency adapter deployment; running Mage inside agencies is optional and not required for the central-orchestrator model.
-- References:
-  - https://docs.mage.ai/design/blocks
-  - https://docs.mage.ai/design/blocks/data-loader
-  - https://docs.mage.ai/design/data-loading
-  - https://docs.mage.ai/design/data-pipeline-management
+  - Source connectors execute inside the agency-local adapter deployment. Mage remains control-plane only; a full Mage runtime/UI does not need to be deployed per agency.
 - Pros & Cons:
-  - Pros: accelerates onboarding of heterogeneous sources via connectors; good for rapid ingestion prototyping.
-  - Cons: added operational/ATO surface area; Mage does not replace the need to implement the FDE request/authorization/transfer protocol.
+  - Pros: clearer ATO boundary by keeping Mage as control-plane only; central scheduling/monitoring without requiring direct agency data access; agency deployments stay focused on adapter runtime.
+  - Cons: does not leverage Mage connectors/pipeline runtime for extraction; connector development/configuration remains the responsibility of each agency adapter; still requires a standard job trigger interface and run status contract.
 - Requirements fit:
-  - Functional: strong coverage for source connectivity via connectors; adapter wrapper must still implement request/authorization/transfer.
-  - Non-functional: can meet security/observability requirements, but requires added operational controls and ATO work for Mage.
-  - Scaling model: helps scale source extraction within adapters; does not remove the need for standard interfaces and registry/discovery.
+  - Functional: supports orchestration-triggered, agency-local extraction and a consistent request/authorization/transfer contract; source connectors remain adapter-native per agency.
+  - Non-functional: can meet security/observability requirements, but requires added operational controls and ATO work for central Mage (GSA-operated).
+  - Scaling model: standardizes orchestration and monitoring, but does not remove the need for standard interfaces, registry/discovery, and rollout governance across many agency deployments.
+
 
 #### Option 4: Minimal Microservices POC (Fastest v0.01)
 
@@ -170,3 +165,9 @@ Adopt this ADR as the initial captured set of architecture options through v0.01
 ## Consequences
 - Enables review/iteration of the options within the implementation repository.
 - Later ADRs can supersede or refine this document as decisions become concrete.
+
+## References:
+  - https://docs.mage.ai/design/blocks
+  - https://docs.mage.ai/design/blocks/data-loader
+  - https://docs.mage.ai/design/data-loading
+  - https://docs.mage.ai/design/data-pipeline-management
