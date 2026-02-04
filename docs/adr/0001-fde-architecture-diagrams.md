@@ -1,6 +1,6 @@
 # ADR 0001 Diagrams: FDE Architecture Options
 
-## Option 1: AWS-Native Adapter Service
+## Option 1: Container-based Adapter Service (Cloud-agnostic)
 
 ### Sequence diagram
 
@@ -10,7 +10,7 @@ sequenceDiagram
   participant R as Receiver Adapter (Requestor)
   participant AV as Access Validation / Agreement Store
   participant S as Sender Adapter
-  participant S3 as S3 (Encrypted Artifact Handoff)
+  participant S3 as Object Store (Encrypted Artifact Handoff)
   participant D as Databricks Landing (or downstream)
 
   R->>R: Generate ephemeral keypair (keep private key)
@@ -44,7 +44,7 @@ flowchart LR
     R[Receiver Adapter]
     S[Sender Adapter]
     SRC[(Agency Data Source)]
-    S3[(S3 Encrypted Handoff + Manifest)]
+    S3[(Object Store Encrypted Handoff + Manifest)]
     DBX[(Databricks Landing)]
   end
 
