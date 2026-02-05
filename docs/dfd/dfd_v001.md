@@ -15,15 +15,15 @@ This is written to be understandable by **business and non-technical users**, wh
 
 | Source URL | Agency / Owner | What Data Is Available | Download / Access Options | Parsing & Adapter Notes |
 |---|---|---|---|---|
-| https://www.census.gov/foreign-trade/schedule.html | US Census Bureau | Trade release schedules (FT900 timing, publication calendar) | HTML page only | **Not a dataset**. Metadata-only source used for scheduling and pipeline triggers. |
-| https://www.census.gov/foreign-trade/data/index.html | US Census Bureau | US imports/exports by country, product (HS, NAICS, End-Use), state/port, historical series | PDF reports, XLS/ZIP files, International Trade API | Prefer **API ingestion**. XLS/ZIP can be batch-loaded. PDFs optional. |
-| https://www.bea.gov/data/intl-trade-investment/international-services-expanded | Bureau of Economic Analysis (BEA) | International services trade (detailed services categories, affiliate services) | Interactive tables, BEA API | Structured tabular data. Best via **BEA API** or table exports. |
-| https://www.bea.gov/data/intl-trade-investment/international-trade-goods-and-services | BEA + Census | Monthly goods & services trade balance, historical series | PDF reports, Excel tables, BEA API | Excel/API preferred. PDFs not required for analytics. |
-| https://data.bts.gov/stories/s/kijm-95mr | US DOT / BTS | Transborder freight and transportation trade statistics | Socrata-backed datasets (CSV/JSON/API) | Use **Socrata API**; avoid scraping story pages. |
-| https://dataweb.usitc.gov/ | US International Trade Commission | US trade & tariff data (HTS, imports/exports, tariffs) | Web UI, official API (token required) | Requires authenticated API. Sender Adapter manages credentials + rate limits. |
-| https://apps.fas.usda.gov/gats/default.aspx | USDA FAS | Global Agricultural Trade System (agricultural imports/exports) | Report-driven downloads (Excel / delimited) | No stable API. Controlled report downloads + parsing. |
-| https://www.fisheries.noaa.gov/national/sustainable-fisheries/foreign-fishery-trade-data | NOAA Fisheries | Fishery imports/exports (value & quantity, 1975–present) | Interactive query system | Limited automation. Prefer Census HS-based substitutes when possible. |
-| http://comtradeplus.un.org/ | United Nations | Global commodity trade data (HS, reporter/partner, value, quantity) | CSV/JSON downloads, official API | Strong candidate for API-based Sender Adapter with throttling. |
+| <https://www.census.gov/foreign-trade/schedule.html> | US Census Bureau | Trade release schedules (FT900 timing, publication calendar) | HTML page only | **Not a dataset**. Metadata-only source used for scheduling and pipeline triggers. |
+| <https://www.census.gov/foreign-trade/data/index.html> | US Census Bureau | US imports/exports by country, product (HS, NAICS, End-Use), state/port, historical series | PDF reports, XLS/ZIP files, International Trade API | Prefer **API ingestion**. XLS/ZIP can be batch-loaded. PDFs optional. |
+| <https://www.bea.gov/data/intl-trade-investment/international-services-expanded> | Bureau of Economic Analysis (BEA) | International services trade (detailed services categories, affiliate services) | Interactive tables, BEA API | Structured tabular data. Best via **BEA API** or table exports. |
+| <https://www.bea.gov/data/intl-trade-investment/international-trade-goods-and-services> | BEA + Census | Monthly goods & services trade balance, historical series | PDF reports, Excel tables, BEA API | Excel/API preferred. PDFs not required for analytics. |
+| <https://data.bts.gov/stories/s/kijm-95mr> | US DOT / BTS | Transborder freight and transportation trade statistics | Socrata-backed datasets (CSV/JSON/API) | Use **Socrata API**; avoid scraping story pages. |
+| <https://dataweb.usitc.gov/> | US International Trade Commission | US trade & tariff data (HTS, imports/exports, tariffs) | Web UI, official API (token required) | Requires authenticated API. Sender Adapter manages credentials + rate limits. |
+| <https://apps.fas.usda.gov/gats/default.aspx> | USDA FAS | Global Agricultural Trade System (agricultural imports/exports) | Report-driven downloads (Excel / delimited) | No stable API. Controlled report downloads + parsing. |
+| <https://www.fisheries.noaa.gov/national/sustainable-fisheries/foreign-fishery-trade-data> | NOAA Fisheries | Fishery imports/exports (value & quantity, 1975–present) | Interactive query system | Limited automation. Prefer Census HS-based substitutes when possible. |
+| <http://comtradeplus.un.org/> | United Nations | Global commodity trade data (HS, reporter/partner, value, quantity) | CSV/JSON downloads, official API | Strong candidate for API-based Sender Adapter with throttling. |
 
 ---
 
@@ -39,16 +39,19 @@ This is written to be understandable by **business and non-technical users**, wh
 ## 3. Core Architecture Concepts
 
 ### Sender Adapter
+
 - Talks to the **external source** (API, file download, portal export)
 - Knows *how to fetch data*, not *where it is stored internally*
 - Produces standardized outputs (files + metadata)
 
 ### Receiver Adapter
+
 - Knows **AWS landing rules** (S3 paths, partitioning, encryption)
 - Publishes only **approved data** to curated storage
 - Registers or announces data availability for consumption
 
 ### Policy-as-Code (PaC)
+
 - Machine-enforced rules
 - Prevents unsafe or non-approved data from being ingested or promoted
 - Runs **before fetch** and **before publication**
@@ -58,11 +61,14 @@ This is written to be understandable by **business and non-technical users**, wh
 ## 4. Ingestion Flow (Step-by-Step)
 
 ### Step 1 – Dataset Planning (No Data Access Yet)
+
 **Sender Adapter – Plan phase**
+
 - Declares intent: source, dataset, purpose, expected sensitivity
 - No network calls
 
 ### Step 2 – Pre-Ingest Policy Gate (PaC)
+
 - Is this source allow-listed?
 - Is this dataset allowed in this environment?
 - Should it be public or restricted?
@@ -71,12 +77,15 @@ This is written to be understandable by **business and non-technical users**, wh
 ✅ Pass → fetch allowed
 
 ### Step 3 – Fetch / Extract
+
 **Sender Adapter – Fetch phase**
+
 - Calls APIs / downloads files
 - Uses Secrets Manager for credentials
 - Uses IAM role (no static AWS keys)
 
 ### Step 4 – Raw Storage (Untrusted)
+
 - Data lands in **S3 Raw**
 - Always encrypted with KMS
 - Two lanes:
@@ -86,6 +95,7 @@ This is written to be understandable by **business and non-technical users**, wh
 Raw data is **not approved for use**.
 
 ### Step 5 – Promotion Policy Gate (PaC)
+
 - Schema validation
 - Data quality checks
 - PII/CUI detection
@@ -94,12 +104,14 @@ Raw data is **not approved for use**.
 Only after this step can data be trusted.
 
 ### Step 6 – Receiver Adapter (Publish)
+
 - Converts to analytics format (Parquet)
 - Applies partitioning
 - Writes to **S3 Curated**
 - Registers metadata (Glue or lightweight catalog)
 
 ### Step 7 – Consumption
+
 - Athena / Redshift query curated data
 - Databricks reads curated zone later
 
@@ -164,13 +176,13 @@ flowchart LR
 ## 7. Current vs Future State
 
 ### Current
+
 - Public datasets
 - API and file-based ingestion
 - Athena for analytics
 
 ### Future
+
 - Restricted / CUI datasets
 - Expanded Policy-as-Code (PaC) rules
 - Databricks for ML and advanced analytics
-
-    
