@@ -142,10 +142,10 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 
 #### Option 4: Minimal Microservices POC (Fastest v0.01)
 
-- Description: Two lightweight services that implement key exchange + gzip/encrypt + return payload.
+- Description: Two lightweight services that implement key exchange + compress/encrypt + return payload.
 - How it works (v0.01):
   - Receiver exposes an endpoint to mint an ephemeral public key per request (or per session) and returns it to the sender.
-  - Sender fetches/loads the source data, compresses (e.g., gzip), encrypts to the receiver’s ephemeral public key, and produces an encrypted payload artifact.
+  - Sender fetches/loads the source data, compresses, encrypts to the receiver's ephemeral public key, and produces an encrypted payload artifact.
   - Sender transfers the encrypted payload to the receiver (simplest: direct HTTPS upload or synchronous response); receiver decrypts using the matching ephemeral private key and validates the end-to-end workflow.
   - Deliberately minimal: this option is about proving the crypto + interchangeability loop, not long-running data movement.
 - Pros & Cons:

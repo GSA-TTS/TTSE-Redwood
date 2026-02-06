@@ -20,7 +20,7 @@ sequenceDiagram
 
   alt Authorized
     S->>S: Extract data from source system
-    S->>S: Compress (gzip) + Encrypt to receiver public key
+    S->>S: Compress + Encrypt to receiver public key
     S->>S3: Upload encrypted artifact(s) (multipart if large)
     S->>S3: Write manifest (metadata + checksums + file list)
     R->>S3: Download manifest + encrypted artifact(s)
@@ -78,7 +78,7 @@ sequenceDiagram
     R->>CP: Submit authorized request + receiver public key
     CP->>A: Trigger agency-local adapter run (HTTPS)
     A->>A: Execute extraction pipeline using embedded Mage connectors
-    A->>A: Compress (gzip) + Encrypt to receiver public key
+    A->>A: Compress + Encrypt to receiver public key
     A->>T: Upload encrypted artifact(s) + manifest
     CP->>CP: Track run status/metadata
     R->>T: Download manifest + encrypted artifact(s)
@@ -142,7 +142,7 @@ sequenceDiagram
     R->>M: Submit authorized job request + receiver public key
     M->>A: Trigger extraction job (HTTPS) + receiver public key
     A->>A: Extract data from agency source system
-    A->>A: Compress (gzip) + Encrypt to receiver public key
+    A->>A: Compress + Encrypt to receiver public key
     A->>S3: Upload encrypted artifact(s) + manifest
     M->>M: Track status/metadata (scheduling/monitoring)
     R->>S3: Download manifest + encrypted artifact(s)
@@ -199,7 +199,7 @@ sequenceDiagram
   R->>R: Generate ephemeral keypair (keep private key)
   R->>S: Data request + receiver public key
   S->>SRC: Fetch or query requested data
-  S->>S: Compress (gzip) + Encrypt to receiver public key
+  S->>S: Compress + Encrypt to receiver public key
   S-->>R: Transfer encrypted payload (direct HTTPS upload or response)
   R->>R: Decrypt with ephemeral private key
   R->>D: Land decrypted data
