@@ -1,35 +1,36 @@
-# ADR 0001: FDE Architecture Design Options (v0.01)
+# ADR 0001: FDE Architecture Design Options (v0.02)
 
 ## Status
 Proposed
 
 ## Context
-This ADR captures the initial architecture design notes and options for the TTSA-ITA Federal Data Exchange (FDE) adapters through Option 4 (v0.01).
+This ADR captures the initial architecture design notes and options for the TTSA-ITA Federal Data Exchange (FDE) adapters through Option 4 (v0.02).
 
 ### Overview
 
-The TTSA ITA effort is focused on designing and prototyping “Federal Data Exchange (FDE) adapters” that can securely transfer data between agency environments over the public internet. While the initial version (v0.01) will demonstrate two adapters communicating end-to-end, the long-term target is an ecosystem of many adapters (a growing “mesh” of agency-specific deployments) that can participate in the same request/authorize/transfer pattern.
+The TTSA ITA effort is focused on designing and prototyping “Federal Data Exchange (FDE) adapters” that can securely transfer data between agency environments over the public internet. While the initial version (v0.02) will demonstrate two adapters communicating end-to-end, the long-term target is an ecosystem of many adapters (a growing “mesh” of agency-specific deployments) that can participate in the same request/authorize/transfer pattern.
 
-The initial version (v0.01) targets a minimal workflow: a receiver initiates a request and shares an ephemeral public key; a sender reads the requested data from a defined source, compresses and encrypts it using the provided key, and returns the encrypted payload for the receiver to decrypt. The architecture must be flexible enough to support arbitrary data sources (APIs, databases, on-prem systems), large payloads (GB-scale, including PDFs), and future expansion to policy-as-code governance (e.g., Immuta-backed access validation) and higher security environments (IL5).
+The initial version (v0.02) targets a minimal workflow: a receiver initiates a request and shares an ephemeral public key; a sender reads the requested data from a defined source, compresses and encrypts it using the provided key, and transfers the encrypted payload across organizations under a zero-trust authorization gate. Each agency owns its own object store; the central access validation/agreement store does not store payload data. The architecture must be flexible enough to support arbitrary data sources (APIs, databases, on-prem systems), large payloads (GB-scale, including PDFs), and future expansion to policy-as-code governance (e.g., Immuta-backed access validation) and higher security environments (IL5).
 
 ### Goals
 
 - Deliver a working prototype of two interchangeable adapters (each can act as sender or receiver).
 - Support secure data movement across different networks over the public internet (assume HTTPS/443) with encryption using per-request ephemeral keys.
 - Provide an internal adapter structure that is extensible to many data sources and can support full refresh and delta-based transfers over time.
-- Prefer AWS-native components where possible to reduce ATO overhead, while keeping the design portable for agencies that are not AWS-based.
-- Ensure downstream compatibility with Databricks as the storage/analytics platform for the ITA use case (initially IL2 data).
+- Prefer managed/container-native components where possible to reduce ATO overhead, while keeping the design portable for agencies that are not AWS-based.
+- Ensure downstream compatibility with Databricks as the storage/analytics platform for the ITA use case (initially IL2 data) as a follow-on integration.
+ 
 
 ### Specifications
 
 #### Functional requirements
 
 - Adapter interchangeability: each deployment can operate as a sender or receiver.
-- Transfer workflow (v0.01):
+- Transfer workflow (v0.02):
   - Receiver generates ephemeral keypair per request and sends request + public key.
   - Sender validates request origin (initially via “ugly hack”; later via access validation service).
-  - Sender reads from source, compresses, encrypts with receiver public key, transmits payload.
-  - Receiver decrypts with private key and stores/forwards data (e.g., to Databricks landing).
+  - Sender reads from source, compresses, encrypts with receiver public key, stages artifacts in the sender org, then transfers to the receiver org after validating that the receiver org object store endpoint is authorized to receive/write the encrypted artifact (receiver-scoped write token/capability).
+  - Receiver stores the encrypted artifacts + manifest in the receiver org object store.
 - Data characteristics:
   - Supports structured and unstructured formats, including PDFs; payload size may be GB-scale.
   - Cadence and “delta vs full refresh” must be supported as a roadmap capability.
@@ -83,11 +84,13 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 
 - Compute: container orchestration (ECS/Fargate, EKS, Kubernetes, or equivalent)
   - Container model: both sender and receiver adapters are deployed as containerized services (container-first packaging).
-- Transfer: encrypted artifact handoff via object storage (multipart when large) + manifest
+- Transfer: encrypted artifact handoff via per-agency object stores (multipart when large) + manifest
   - Sender extracts data from the source system, packages it as one or more files, then encrypts the payload using the receiver public key.
-  - Sender uploads the encrypted payload to an object store (multipart upload when large) to support reliable transfers and retries for GB-scale artifacts.
+  - Sender uploads/stages encrypted artifacts + manifest into a sender-managed object store.
+  - Before any cross-agency transfer, the sender must obtain explicit authorization to write into the receiver environment (zero-trust gate) and obtain upload instructions.
+  - Sender pushes the encrypted artifacts + manifest into the receiver-managed object store (multipart upload when large) to support reliable transfers and retries for GB-scale artifacts.
   - Sender writes a manifest alongside the payload (e.g., JSON) containing metadata such as dataset identifier, time range, file list, sizes, checksums, compression/encryption method, and schema/version.
-  - Receiver downloads payload + manifest, verifies checksums/integrity, decrypts using its private key, and then lands the decrypted data to the downstream store.
+  - Receiver stores the encrypted artifacts + manifest in the receiver org object store.
 - Orchestration: workflow engine (optional) for request lifecycle
   - Models the end-to-end request lifecycle as states (requested -> authorized -> extracting -> uploaded -> completed/failed).
   - Coordinates calls to the relevant components (access validation, sender adapter extract job, manifest/payload publication).
@@ -110,7 +113,7 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 - How it works:
   - A central control-plane schedules or triggers runs and calls an agency-local adapter job trigger endpoint.
   - The agency-local FDE adapter executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
-  - The same agency-local FDE adapter packages/compresses/encrypts and transfers the payload using the FDE protocol.
+  - The same agency-local FDE adapter packages/compresses/encrypts, stages artifacts in the sender org, and transfers into the receiver org after validating that the receiver org object store endpoint is authorized to receive/write the encrypted artifact (per-agency object stores).
 - Control-plane boundary:
   - Authorization (Access Validation/DSA checks) remains authoritative before any extraction; central orchestration only triggers agency-local work after approval.
 - Pros & Cons:
@@ -126,7 +129,7 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
 - Description: Mage (central, GSA-operated) provides scheduling/monitoring and triggers extraction jobs; agency-local adapters execute extraction and implement the FDE request/authorization/encryption/transfer protocol. Source connectivity stays within each agency boundary (agency-owned credentials and network access).
 - How it works:
   - Mage triggers an agency adapter job via a standard interface (e.g., HTTPS job trigger endpoint) and tracks run status.
-  - The agency adapter runs the extraction logic locally (using adapter-native connectors), then packages/encrypts/transfers the payload using the FDE protocol.
+  - The agency adapter runs the extraction logic locally (using adapter-native connectors), then packages/encrypts, stages artifacts in the sender org, and transfers into the receiver org after validating that the receiver org object store endpoint is authorized to receive/write the encrypted artifact (per-agency object stores).
 - Control-plane boundary:
   - Access Validation/DSA checks remain authoritative for authorization; Mage orchestrates execution after requests are authorized, without requiring direct network/credential access to agency data stores.
 - Connector location:
@@ -139,14 +142,13 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Non-functional: can meet security/observability requirements, but requires added operational controls and ATO work for central Mage (GSA-operated).
   - Scaling model: standardizes orchestration and monitoring, but does not remove the need for standard interfaces, registry/discovery, and rollout governance across many agency deployments.
 
-
-#### Option 4: Minimal Microservices POC (Fastest v0.01)
+#### Option 4: Minimal Microservices POC (Fastest v0.02)
 
 - Description: Two lightweight services that implement key exchange + compress/encrypt + return payload.
-- How it works (v0.01):
+- How it works (v0.02):
   - Receiver exposes an endpoint to mint an ephemeral public key per request (or per session) and returns it to the sender.
   - Sender fetches/loads the source data, compresses, encrypts to the receiver's ephemeral public key, and produces an encrypted payload artifact.
-  - Sender transfers the encrypted payload to the receiver (simplest: direct HTTPS upload or synchronous response); receiver decrypts using the matching ephemeral private key and validates the end-to-end workflow.
+  - Sender transfers the encrypted payload to the receiver only after an explicit receiver-boundary authorization check; receiver decrypts using the matching ephemeral private key and validates the end-to-end workflow.
   - Deliberately minimal: this option is about proving the crypto + interchangeability loop, not long-running data movement.
 - Pros & Cons:
   - Pros: fastest way to validate end-to-end cryptographic workflow and adapter interchangeability.
@@ -155,12 +157,12 @@ The initial version (v0.01) targets a minimal workflow: a receiver initiates a r
   - Replace direct/synchronous transfer with a robust transport backend (e.g., object-store handoff + manifest, multipart uploads, resumable semantics).
   - Introduce stable, standard request/transfer interfaces and a simple registry/discovery mechanism before scaling beyond a pair of adapters.
 - Requirements fit:
-  - Functional: directly exercises the v0.01 workflow end-to-end (request, ephemeral keys, encrypt/decrypt).
+  - Functional: directly exercises the v0.02 workflow end-to-end (request, ephemeral keys, encrypt/decrypt).
   - Non-functional: limited for production (GB-scale reliability, advanced observability, hardened authorization).
   - Scaling model: acceptable for two-adapter prototype; will require evolution to standard interfaces, registry, and robust transfer semantics.
 
 ## Decision
-Adopt this ADR as the initial captured set of architecture options through v0.01 / Option 4 for review.
+Adopt this ADR as the initial captured set of architecture options through v0.02 / Option 4 for review.
 
 ## Consequences
 - Enables review/iteration of the options within the implementation repository.
