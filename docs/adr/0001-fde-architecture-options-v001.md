@@ -29,7 +29,9 @@ The initial version (v0.02) targets a minimal workflow: a receiver initiates a r
 - Transfer workflow (v0.02):
   - Receiver generates ephemeral keypair per request and sends request + public key.
   - Sender validates request origin (initially via “ugly hack”; later via access validation service).
-  - Sender reads from source, compresses, encrypts with receiver public key, stages artifacts in the sender org, then transfers to the receiver org after validating that the receiver org object store endpoint is authorized to receive/write the encrypted artifact (receiver-scoped write token/capability).
+  - Sender reads from source, compresses, encrypts with receiver public key, stages artifacts in the sender org, and requests transfer instructions from the receiver adapter (e.g., SFTP destination, presigned URL).
+  - Receiver validates delivery-time authorization with the access validation service (zero-trust gate) and returns transfer mechanism + authorization details to the sender.
+  - Sender initiates the transfer of encrypted artifacts + manifest into the receiver org object store using the provided instructions.
   - Receiver stores the encrypted artifacts + manifest in the receiver org object store.
 - Data characteristics:
   - Supports structured and unstructured formats, including PDFs; payload size may be GB-scale.
@@ -87,8 +89,8 @@ The initial version (v0.02) targets a minimal workflow: a receiver initiates a r
 - Transfer: encrypted artifact handoff via per-agency object stores (multipart when large) + manifest
   - Sender extracts data from the source system, packages it as one or more files, then encrypts the payload using the receiver public key.
   - Sender uploads/stages encrypted artifacts + manifest into a sender-managed object store.
-  - Before any cross-agency transfer, the sender must obtain explicit authorization to write into the receiver environment (zero-trust gate) and obtain upload instructions.
-  - Sender pushes the encrypted artifacts + manifest into the receiver-managed object store (multipart upload when large) to support reliable transfers and retries for GB-scale artifacts.
+  - Before any cross-agency transfer, the sender requests transfer instructions from the receiver adapter; the receiver validates delivery-time authorization (zero-trust gate) and returns mechanism + authorization details (e.g., presigned URL, SFTP destination).
+  - Sender initiates the transfer of encrypted artifacts + manifest into the receiver-managed object store (multipart upload when large) to support reliable transfers and retries for GB-scale artifacts.
   - Sender writes a manifest alongside the payload (e.g., JSON) containing metadata such as dataset identifier, time range, file list, sizes, checksums, compression/encryption method, and schema/version.
   - Receiver stores the encrypted artifacts + manifest in the receiver org object store.
 - Orchestration: workflow engine (optional) for request lifecycle
@@ -113,7 +115,7 @@ The initial version (v0.02) targets a minimal workflow: a receiver initiates a r
 - How it works:
   - A central control-plane schedules or triggers runs and calls an agency-local adapter job trigger endpoint.
   - The agency-local FDE adapter executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
-  - The same agency-local FDE adapter packages/compresses/encrypts, stages artifacts in the sender org, and transfers into the receiver org after validating that the receiver org object store endpoint is authorized to receive/write the encrypted artifact (per-agency object stores).
+  - The same agency-local FDE adapter packages/compresses/encrypts, stages artifacts in the sender org, requests transfer instructions from the receiver adapter, and then initiates transfer into the receiver org object store (per-agency object stores).
 - Control-plane boundary:
   - Authorization (Access Validation/DSA checks) remains authoritative before any extraction; central orchestration only triggers agency-local work after approval.
 - Pros & Cons:
@@ -129,7 +131,7 @@ The initial version (v0.02) targets a minimal workflow: a receiver initiates a r
 - Description: Mage (central, GSA-operated) provides scheduling/monitoring and triggers extraction jobs; agency-local adapters execute extraction and implement the FDE request/authorization/encryption/transfer protocol. Source connectivity stays within each agency boundary (agency-owned credentials and network access).
 - How it works:
   - Mage triggers an agency adapter job via a standard interface (e.g., HTTPS job trigger endpoint) and tracks run status.
-  - The agency adapter runs the extraction logic locally (using adapter-native connectors), then packages/encrypts, stages artifacts in the sender org, and transfers into the receiver org after validating that the receiver org object store endpoint is authorized to receive/write the encrypted artifact (per-agency object stores).
+  - The agency adapter runs the extraction logic locally (using adapter-native connectors), then packages/encrypts, stages artifacts in the sender org, requests transfer instructions from the receiver adapter, and then initiates transfer into the receiver org object store (per-agency object stores).
 - Control-plane boundary:
   - Access Validation/DSA checks remain authoritative for authorization; Mage orchestrates execution after requests are authorized, without requiring direct network/credential access to agency data stores.
 - Connector location:

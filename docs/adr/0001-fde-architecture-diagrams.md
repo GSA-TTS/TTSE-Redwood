@@ -29,9 +29,11 @@ sequenceDiagram
     S->>S: Compress + Encrypt to receiver public key
     S->>SOS: Upload encrypted artifact(s) (multipart if large)
     S->>SOS: Write manifest (metadata + checksums + file list)
-    S->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>S: Approved (or Denied)
-    S->>ROS: Push encrypted artifact(s) + manifest
+    S->>R: Request transfer instructions (e.g., SFTP, presigned URL)
+    R->>AV: Delivery-time authorization check (sender -> receiver store)
+    AV-->>R: Approved (or Denied)
+    R-->>S: Transfer instructions + authorization details
+    S->>ROS: Transfer encrypted artifact(s) + manifest using instructions
   else Denied
     S-->>R: Denied / error response
   end
@@ -60,7 +62,10 @@ flowchart LR
   S -->|AuthZ check| AV
   S -->|Extract| SRC
   S -->|Write encrypted artifacts + manifest| SOS
-  S -->|Push artifacts + manifest| ROS
+  S -->|Request transfer instructions| R
+  R -->|Delivery-time authZ check| AV
+  R -->|Transfer instructions| S
+  S -->|Transfer using instructions| ROS
   R -->|Receive encrypted artifacts + manifest| ROS
 ```
 
@@ -94,9 +99,11 @@ sequenceDiagram
     A->>A: Execute extraction pipeline using embedded Mage connectors
     A->>A: Compress + Encrypt to receiver public key
     A->>SOS: Upload encrypted artifact(s) + manifest
-    A->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>A: Approved (or Denied)
-    A->>ROS: Push encrypted artifact(s) + manifest
+    A->>R: Request transfer instructions (e.g., SFTP, presigned URL)
+    R->>AV: Delivery-time authorization check (sender -> receiver store)
+    AV-->>R: Approved (or Denied)
+    R-->>A: Transfer instructions + authorization details
+    A->>ROS: Transfer encrypted artifact(s) + manifest using instructions
     CP->>CP: Track run status/metadata
   else Denied
     AV-->>R: Denied / error response
@@ -130,6 +137,8 @@ flowchart LR
   A3 --> SOS3
   A3 --> ROS3
   R3 --> ROS3
+  A3 --> R3
+  R3 --> AV3
 ```
 
 ## Option 3: Mage AI as Control-plane Orchestrator + Adapter Security Wrapper
@@ -162,9 +171,11 @@ sequenceDiagram
     A->>A: Extract data from agency source system
     A->>A: Compress + Encrypt to receiver public key
     A->>SOS: Upload encrypted artifact(s) + manifest
-    A->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>A: Approved (or Denied)
-    A->>ROS: Push encrypted artifact(s) + manifest
+    A->>R: Request transfer instructions (e.g., SFTP, presigned URL)
+    R->>AV: Delivery-time authorization check (sender -> receiver store)
+    AV-->>R: Approved (or Denied)
+    R-->>A: Transfer instructions + authorization details
+    A->>ROS: Transfer encrypted artifact(s) + manifest using instructions
     M->>M: Track status/metadata (scheduling/monitoring)
   else Denied
     AV-->>R: Denied / error response
@@ -196,6 +207,8 @@ flowchart LR
   M --> A
   A --> SRC
   A --> SOS
+  A --> R
+  R --> AV
   A --> ROS
   R --> ROS
 ```
@@ -227,9 +240,11 @@ sequenceDiagram
     R->>S: Data request + receiver public key
     S->>SRC: Fetch or query requested data
     S->>S: Compress + Encrypt to receiver public key
-    S->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>S: Approved (or Denied)
-    S-->>ROS: Push encrypted payload (HTTPS)
+    S->>R: Request transfer instructions (e.g., SFTP, presigned URL)
+    R->>AV: Delivery-time authorization check (sender -> receiver store)
+    AV-->>R: Approved (or Denied)
+    R-->>S: Transfer instructions + authorization details
+    S-->>ROS: Transfer encrypted payload using instructions
   else Denied
     R-->>R: Denied / error response
   end
