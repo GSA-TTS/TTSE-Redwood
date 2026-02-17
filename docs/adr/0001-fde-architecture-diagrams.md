@@ -1,4 +1,4 @@
-# ADR 0001 Diagrams: FDE Architecture Options (v0.02)
+# ADR 0001 Diagrams: FDE Architecture Options (v0.03)
 
 ## Option 1: Container-based Adapter Service (Cloud-agnostic)
 
@@ -8,15 +8,15 @@
 sequenceDiagram
   autonumber
   box "Receiver org"
-    participant R as Receiver Adapter (Requestor)
-    participant ROS as Receiver Object Store (Encrypted Handoff)
+    participant RMS as Receiver Mounted Storage<br/>(Encrypted Temporary Landing)
+    participant R as Receiver Agent (Requestor)
   end
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
   end
   box "Sender org"
-    participant S as Sender Adapter
-    participant SOS as Sender Object Store (Encrypted Staging)
+    participant S as Sender Agent
+    participant SMS as Sender Mounted Storage<br/>(Encrypted Temporary Staging)
   end
 
   R->>R: Generate ephemeral keypair (keep private key)
@@ -27,13 +27,12 @@ sequenceDiagram
   alt Authorized
     S->>S: Extract data from source system
     S->>S: Compress + Encrypt to receiver public key
-    S->>SOS: Upload encrypted artifact(s) (multipart if large)
-    S->>SOS: Write manifest (metadata + checksums + file list)
-    S->>R: Request transfer instructions (e.g., SFTP, presigned URL)
-    R->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>R: Approved (or Denied)
-    R-->>S: Transfer instructions + authorization details
-    S->>ROS: Transfer encrypted artifact(s) + manifest using instructions
+    S->>SMS: Write encrypted artifact(s) (multipart if large)
+    S->>SMS: Write manifest (metadata + checksums + file list)
+    S->>AV: Delivery-time authorization check
+    AV-->>S: Approved (or Denied)
+    S->>R: Transfer encrypted artifacts and manifest via SSH protocol
+    R->>RMS: Write encrypted artifacts and manifest to mounted storage
   else Denied
     S-->>R: Denied / error response
   end
@@ -48,25 +47,23 @@ flowchart LR
   end
 
   subgraph SenderOrg[Sender org]
-    S[Sender Adapter]
+    S[Sender Agent]
     SRC[(Agency Data Source)]
-    SOS[(Sender Object Store Encrypted Staging)]
+    SMS[(Sender Mounted Storage<br/>Encrypted Temporary Staging)]
   end
 
   subgraph ReceiverOrg[Receiver org]
-    R[Receiver Adapter]
-    ROS[(Receiver Object Store Encrypted Handoff + Manifest)]
+    RMS[(Receiver Mounted Storage<br/>Encrypted Temporary Landing + Manifest)]
+    R[Receiver Agent]
   end
 
   R -->|Request + identity + receiver public key| S
   S -->|AuthZ check| AV
   S -->|Extract| SRC
-  S -->|Write encrypted artifacts + manifest| SOS
-  S -->|Request transfer instructions| R
-  R -->|Delivery-time authZ check| AV
-  R -->|Transfer instructions| S
-  S -->|Transfer using instructions| ROS
-  R -->|Receive encrypted artifacts + manifest| ROS
+  S -->|Write encrypted artifacts + manifest| SMS
+  S -->|Delivery-time authZ check| AV
+  S -->|Transfer via SSH-based protocol| R
+  R -->|Write encrypted artifacts + manifest| RMS
 ```
 
 ## Option 2: Mage AI Embedded in Agency-Local FDE Adapter (Maximize Connector and Pipeline Capabilities)
@@ -77,16 +74,16 @@ flowchart LR
 sequenceDiagram
   autonumber
   box "Receiver org"
-    participant R as Receiver Adapter (Requestor)
-    participant ROS as Receiver Object Store (Encrypted Handoff)
+    participant RMS as Receiver Mounted Storage<br/>(Encrypted Temporary Landing)
+    participant R as Receiver Agent (Requestor)
   end
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
     participant CP as Central Control-plane Scheduler
   end
   box "Sender org"
-    participant A as Agency-Local FDE Adapter (Mage-enabled)
-    participant SOS as Sender Object Store (Encrypted Staging)
+    participant A as Agency-Local FDE Agent (Mage-enabled)
+    participant SMS as Sender Mounted Storage<br/>(Encrypted Temporary Staging)
   end
 
   R->>R: Generate ephemeral keypair (keep private key)
@@ -98,12 +95,11 @@ sequenceDiagram
     CP->>A: Trigger agency-local adapter run (HTTPS)
     A->>A: Execute extraction pipeline using embedded Mage connectors
     A->>A: Compress + Encrypt to receiver public key
-    A->>SOS: Upload encrypted artifact(s) + manifest
-    A->>R: Request transfer instructions (e.g., SFTP, presigned URL)
-    R->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>R: Approved (or Denied)
-    R-->>A: Transfer instructions + authorization details
-    A->>ROS: Transfer encrypted artifact(s) + manifest using instructions
+    A->>SMS: Write encrypted artifact(s) + manifest
+    A->>AV: Delivery-time authorization check
+    AV-->>A: Approved (or Denied)
+    A->>R: Transfer encrypted artifacts and manifest via SSH protocol
+    R->>RMS: Write encrypted artifacts and manifest to mounted storage
     CP->>CP: Track run status/metadata
   else Denied
     AV-->>R: Denied / error response
@@ -120,24 +116,23 @@ flowchart LR
   end
 
   subgraph AgencyBoundary[Sender org]
-    A3["FDE Adapter (Mage-enabled extraction and FDE transfer)"]
+    A3["FDE Agent (Mage-enabled extraction and FDE transfer)"]
     SRC3[(Agency Data Source)]
-    SOS3[(Sender Object Store Encrypted Staging)]
+    SMS3[(Sender Mounted Storage<br/>Encrypted Temporary Staging)]
   end
 
   subgraph ReceiverSide[Receiver org]
-    R3[Receiver Adapter]
-    ROS3[(Receiver Object Store Encrypted Handoff + Manifest)]
+    RMS3[(Receiver Mounted Storage<br/>Encrypted Temporary Landing + Manifest)]
+    R3[Receiver Agent]
   end
 
   R3 --> AV3
   AV3 --> CP3
   CP3 --> A3
   A3 --> SRC3
-  A3 --> SOS3
-  A3 --> ROS3
-  R3 --> ROS3
+  A3 --> SMS3
   A3 --> R3
+  R3 --> RMS3
   R3 --> AV3
 ```
 
@@ -149,16 +144,16 @@ flowchart LR
 sequenceDiagram
   autonumber
   box "Receiver org"
-    participant R as Receiver Adapter (Requestor)
-    participant ROS as Receiver Object Store (Encrypted Handoff)
+    participant RMS as Receiver Mounted Storage<br/>(Encrypted Temporary Landing)
+    participant R as Receiver Agent (Requestor)
   end
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
     participant M as Mage (Central Scheduler/Monitor)
   end
   box "Sender org"
-    participant A as Agency-Local Adapter (Extraction + FDE Wrapper)
-    participant SOS as Sender Object Store (Encrypted Staging)
+    participant A as Agency-Local Agent (Extraction + FDE Wrapper)
+    participant SMS as Sender Mounted Storage<br/>(Encrypted Temporary Staging)
   end
 
   R->>R: Generate ephemeral keypair (keep private key)
@@ -170,12 +165,11 @@ sequenceDiagram
     M->>A: Trigger extraction job (HTTPS) + receiver public key
     A->>A: Extract data from agency source system
     A->>A: Compress + Encrypt to receiver public key
-    A->>SOS: Upload encrypted artifact(s) + manifest
-    A->>R: Request transfer instructions (e.g., SFTP, presigned URL)
-    R->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>R: Approved (or Denied)
-    R-->>A: Transfer instructions + authorization details
-    A->>ROS: Transfer encrypted artifact(s) + manifest using instructions
+    A->>SMS: Write encrypted artifact(s) + manifest
+    A->>AV: Delivery-time authorization check
+    AV-->>A: Approved (or Denied)
+    A->>R: Transfer encrypted artifacts and manifest via SSH protocol
+    R->>RMS: Write encrypted artifacts and manifest to mounted storage
     M->>M: Track status/metadata (scheduling/monitoring)
   else Denied
     AV-->>R: Denied / error response
@@ -192,28 +186,27 @@ flowchart LR
   end
 
   subgraph SenderOrg[Sender org]
-    A["Agency-Local Adapter: Connectors and FDE Wrapper"]
+    A["Agency-Local Agent: Connectors and FDE Wrapper"]
     SRC[(Agency Data Source)]
-    SOS[(Sender Object Store Encrypted Staging)]
+    SMS[(Sender Mounted Storage<br/>Encrypted Temporary Staging)]
   end
 
   subgraph ReceiverOrg[Receiver org]
-    R[Receiver Adapter]
-    ROS[(Receiver Object Store Encrypted Handoff + Manifest)]
+    RMS[(Receiver Mounted Storage<br/>Encrypted Temporary Landing + Manifest)]
+    R[Receiver Agent]
   end
 
   R --> AV
   AV --> M
   M --> A
   A --> SRC
-  A --> SOS
+  A --> SMS
   A --> R
   R --> AV
-  A --> ROS
-  R --> ROS
+  R --> RMS
 ```
 
-## Option 4: Minimal Microservices POC (Fastest v0.02)
+## Option 4: Minimal Microservices POC (Fastest v0.03)
 
 ### Sequence diagram
 
@@ -222,7 +215,7 @@ sequenceDiagram
   autonumber
   box "Receiver org"
     participant R as Receiver (Minimal Service)
-    participant ROS as Receiver Object Store (Encrypted Handoff)
+    participant RMS as Receiver Mounted Storage<br/>(Encrypted Temporary Landing)
   end
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
@@ -240,11 +233,10 @@ sequenceDiagram
     R->>S: Data request + receiver public key
     S->>SRC: Fetch or query requested data
     S->>S: Compress + Encrypt to receiver public key
-    S->>R: Request transfer instructions (e.g., SFTP, presigned URL)
-    R->>AV: Delivery-time authorization check (sender -> receiver store)
-    AV-->>R: Approved (or Denied)
-    R-->>S: Transfer instructions + authorization details
-    S-->>ROS: Transfer encrypted payload using instructions
+    S->>AV: Delivery-time authorization check
+    AV-->>S: Approved (or Denied)
+    S-->>R: Transfer encrypted payload via SSH protocol
+    R->>RMS: Write encrypted payload to mounted storage
   else Denied
     R-->>R: Denied / error response
   end
@@ -259,11 +251,12 @@ flowchart LR
     AV4[Access Validation / Agreement Store]
     S4[Sender Minimal Service]
     SRC4[(Source System)]
-    ROS4[(Receiver Object Store Encrypted Handoff)]
+    RMS4[(Receiver Mounted Storage<br/>Encrypted Temporary Landing)]
   end
 
   R4 -->|Authorization check| AV4
   R4 -->|Request + receiver public key| S4
   S4 -->|Extract| SRC4
-  S4 -->|Encrypt + Push HTTPS| ROS4
+  S4 -->|Encrypt + Transfer via SSH-based protocol| R4
+  R4 -->|Write encrypted payload| RMS4
 ```
