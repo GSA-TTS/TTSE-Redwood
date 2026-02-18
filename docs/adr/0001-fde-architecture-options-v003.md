@@ -30,8 +30,9 @@ The initial version (v0.03) targets a minimal workflow: a receiver initiates a r
   - Receiver generates ephemeral keypair per request and sends request + public key.
   - Sender validates request origin (initially via “ugly hack”; later via access validation service).
   - Sender reads from source, compresses, encrypts with receiver public key, and stages artifacts in the sender org mounted storage.
-  - Before any cross-agency transfer, the sender performs a delivery-time authorization check with the access validation service (zero-trust gate).
-  - Sender initiates the transfer of encrypted artifacts + manifest to the receiver agent endpoint using a standardized SSH-based protocol.
+  - All agent-to-agent and agent-to-control-plane HTTPS calls perform TLS identity validation using mTLS certificates issued by the GSA Private CA (keystore certificates).
+  - Sender initiates a delivery attempt to the receiver agent endpoint over HTTPS; the receiver validates sender identity (mTLS) and performs a delivery-time authorization check with the access validation service before approving acceptance.
+  - Sender transfers encrypted artifacts + manifest via a standardized SSH-based protocol only after receiver approval.
   - Receiver stores the encrypted artifacts + manifest in the receiver org mounted storage (temporary landing) until downstream processing completes.
 - Data characteristics:
   - Supports structured and unstructured formats, including PDFs; payload size may be GB-scale.
@@ -43,6 +44,8 @@ The initial version (v0.03) targets a minimal workflow: a receiver initiates a r
 
 - Security:
   - End-to-end encryption of data in transit using per-request keys (ephemeral in memory for POC).
+  - Mutual TLS (mTLS) for all agent-to-agent and agent-to-control-plane HTTPS communication, using GSA-owned certificates issued by a GSA Private CA (e.g., AWS ACM Private CA) to validate identity and trust.
+  - Keystore certificates are owned/operated by the GSA control-plane (Private CA trust anchor); agency agents use certificates issued from this keystore for identity verification.
   - Auditability hooks for later governance integration (policy-as-code, identity validation).
 - Reliability:
   - Support reliable transfer of GB-scale payloads, including retry/resume mechanisms where appropriate (production target state).
@@ -89,8 +92,9 @@ The initial version (v0.03) targets a minimal workflow: a receiver initiates a r
 - Transfer: encrypted artifact handoff via per-agency mounted storage (multipart when large) + manifest
   - Sender extracts data from the source system, packages it as one or more files, then encrypts the payload using the receiver public key.
   - Sender writes/stages encrypted artifacts + manifest into sender-owned mounted storage.
-  - Before any cross-agency transfer, the sender agent performs a delivery-time authorization check with the access validation service (zero-trust gate).
-  - Sender initiates the transfer of encrypted artifacts + manifest to the receiver agent endpoint (multipart/resumable where supported) to support reliable transfers and retries for GB-scale artifacts.
+  - Optional optimization: sender agent performs a pre-check with the access validation service before initiating transfer.
+  - Sender initiates a delivery attempt to the receiver agent endpoint over HTTPS; receiver validates sender identity (mTLS) and performs delivery-time authorization check with the access validation service.
+  - Sender transfers encrypted artifacts + manifest via SSH (multipart/resumable where supported) after receiver approval to support reliable transfers and retries for GB-scale artifacts.
   - Sender writes a manifest alongside the payload (e.g., JSON) containing metadata such as dataset identifier, time range, file list, sizes, checksums, compression/encryption method, and schema/version.
   - Receiver stores the encrypted artifacts + manifest in the receiver org mounted storage (temporary landing).
 - Orchestration: workflow engine (optional) for request lifecycle
@@ -112,11 +116,13 @@ The initial version (v0.03) targets a minimal workflow: a receiver initiates a r
 - Mage usage:
   - Mage connectors and pipeline runtime are embedded in the agency-local FDE agent (no separate Mage service/UI is required per agency).
   - This option assumes agencies are willing to run the FDE agent container with Mage-enabled extraction capabilities where the data lives.
-- How it works:
+ - How it works:
   - A central control-plane schedules or triggers runs and calls an agency-local agent job trigger endpoint.
   - The agency-local FDE agent executes the extraction pipeline using Mage connectors with agency-managed credentials and network access.
-  - The same agency-local FDE agent packages/compresses/encrypts, stages artifacts in sender-owned mounted storage, performs a delivery-time authorization check, and then initiates transfer to the receiver agent endpoint.
-- Control-plane boundary:
+  - The same agency-local FDE agent packages/compresses/encrypts and stages artifacts in sender-owned mounted storage.
+  - The sender initiates a delivery attempt to the receiver agent endpoint over HTTPS; the receiver validates sender identity (mTLS) and performs delivery-time authorization check with the access validation service before approving acceptance.
+  - The sender transfers encrypted artifacts + manifest via SSH only after receiver approval; receiver writes artifacts to receiver-owned mounted storage.
+ - Control-plane boundary:
   - Authorization (Access Validation/DSA checks) remains authoritative before any extraction; central orchestration only triggers agency-local work after approval.
 - Pros & Cons:
   - Pros: strongest use of Mage connectors/pipeline runtime; fastest path to integrate many heterogeneous sources when each agency owns its connector configuration.
@@ -129,12 +135,14 @@ The initial version (v0.03) targets a minimal workflow: a receiver initiates a r
 #### Option 3: Mage AI as Control-plane Orchestrator + Adapter Security Wrapper
 
 - Description: Mage (central, GSA-operated) provides scheduling/monitoring and triggers extraction jobs; agency-local agents execute extraction and implement the FDE request/authorization/encryption/transfer protocol. Source connectivity stays within each agency boundary (agency-owned credentials and network access).
-- How it works:
+ - How it works:
   - Mage triggers an agency agent job via a standard interface (e.g., HTTPS job trigger endpoint) and tracks run status.
-  - The agency agent runs the extraction logic locally (using agent-native connectors), then packages/encrypts, stages artifacts in sender-owned mounted storage, performs a delivery-time authorization check, and then initiates transfer to the receiver agent endpoint.
-- Control-plane boundary:
+  - The agency agent runs the extraction logic locally (using agent-native connectors), then packages/encrypts and stages artifacts in sender-owned mounted storage.
+  - The sender initiates a delivery attempt to the receiver agent endpoint over HTTPS; the receiver validates sender identity (mTLS) and performs delivery-time authorization check with the access validation service before approving acceptance.
+  - The sender transfers encrypted artifacts + manifest via SSH only after receiver approval; receiver writes artifacts to receiver-owned mounted storage.
+ - Control-plane boundary:
   - Access Validation/DSA checks remain authoritative for authorization; Mage orchestrates execution after requests are authorized, without requiring direct network/credential access to agency data stores.
-- Connector location:
+ - Connector location:
   - Source connectors execute inside the agency-local agent deployment. Mage remains control-plane only; a full Mage runtime/UI does not need to be deployed per agency.
 - Pros & Cons:
   - Pros: clearer ATO boundary by keeping Mage as control-plane only; central scheduling/monitoring without requiring direct agency data access; agency deployments stay focused on adapter runtime.

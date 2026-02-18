@@ -13,6 +13,7 @@ sequenceDiagram
   end
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
+    participant CA as Keystore Certificates / Private CA
   end
   box "Sender org"
     participant S as Sender Agent
@@ -20,8 +21,10 @@ sequenceDiagram
   end
 
   R->>R: Generate ephemeral keypair (keep private key)
-  R->>S: Data request + identity proof + receiver public key
-  S->>AV: Validate request identity + agreement/policy for dataset + receiver acceptance
+  R->>CA: TLS identity validation (mTLS)
+  R->>S: Data request + identity proof + receiver public key (HTTPS)
+  S->>CA: TLS identity validation (mTLS)
+  S->>AV: AuthZ check (HTTPS)
   AV-->>S: Authorized to deliver to receiver data store (or Denied)
 
   alt Authorized
@@ -29,8 +32,10 @@ sequenceDiagram
     S->>S: Compress + Encrypt to receiver public key
     S->>SMS: Write encrypted artifact(s) (multipart if large)
     S->>SMS: Write manifest (metadata + checksums + file list)
-    S->>AV: Delivery-time authorization check
-    AV-->>S: Approved (or Denied)
+    S->>R: Delivery attempt (HTTPS)
+    R->>CA: TLS identity validation (mTLS)
+    R->>AV: Delivery-time authZ check (HTTPS)
+    AV-->>R: Approved (or Denied)
     S->>R: Transfer encrypted artifacts and manifest via SSH protocol
     R->>RMS: Write encrypted artifacts and manifest to mounted storage
   else Denied
@@ -44,6 +49,7 @@ sequenceDiagram
 flowchart LR
   subgraph ControlPlane[Control-plane]
     AV[Access Validation / Agreement Store]
+    CA[Keystore Certificates / Private CA]
   end
 
   subgraph SenderOrg[Sender org]
@@ -57,12 +63,12 @@ flowchart LR
     R[Receiver Agent]
   end
 
-  R -->|Request + identity + receiver public key| S
-  S -->|AuthZ check| AV
+  R -->|Request + identity + receiver public key HTTPS mTLS| S
+  S -->|AuthZ check HTTPS mTLS| AV
   S -->|Extract| SRC
   S -->|Write encrypted artifacts + manifest| SMS
-  S -->|Delivery-time authZ check| AV
   S -->|Transfer via SSH-based protocol| R
+  R -->|Delivery-time authZ check HTTPS mTLS| AV
   R -->|Write encrypted artifacts + manifest| RMS
 ```
 
@@ -80,6 +86,7 @@ sequenceDiagram
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
     participant CP as Central Control-plane Scheduler
+    participant CA as Keystore Certificates / Private CA
   end
   box "Sender org"
     participant A as Agency-Local FDE Agent (Mage-enabled)
@@ -87,17 +94,22 @@ sequenceDiagram
   end
 
   R->>R: Generate ephemeral keypair (keep private key)
-  R->>AV: Request authorization for dataset + params
+  R->>CA: TLS identity validation (mTLS)
+  R->>AV: Request authorization for dataset + params (HTTPS)
   AV-->>R: Authorized to deliver to receiver data store (or Denied)
 
   alt Authorized
-    R->>CP: Submit authorized request + receiver public key
+    R->>CA: TLS identity validation (mTLS)
+    R->>CP: Submit authorized request + receiver public key (HTTPS)
+    CP->>CA: TLS identity validation (mTLS)
     CP->>A: Trigger agency-local adapter run (HTTPS)
     A->>A: Execute extraction pipeline using embedded Mage connectors
     A->>A: Compress + Encrypt to receiver public key
     A->>SMS: Write encrypted artifact(s) + manifest
-    A->>AV: Delivery-time authorization check
-    AV-->>A: Approved (or Denied)
+    A->>R: Delivery attempt (HTTPS)
+    R->>CA: TLS identity validation (mTLS)
+    R->>AV: Delivery-time authZ check (HTTPS)
+    AV-->>R: Approved (or Denied)
     A->>R: Transfer encrypted artifacts and manifest via SSH protocol
     R->>RMS: Write encrypted artifacts and manifest to mounted storage
     CP->>CP: Track run status/metadata
@@ -113,6 +125,7 @@ flowchart LR
   subgraph ControlPlane[Control-plane]
     AV3[Access Validation / Agreement Store]
     CP3["Central Scheduler and Monitoring"]
+    CA3[Keystore Certificates / Private CA]
   end
 
   subgraph AgencyBoundary[Sender org]
@@ -150,6 +163,7 @@ sequenceDiagram
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
     participant M as Mage (Central Scheduler/Monitor)
+    participant CA as Keystore Certificates / Private CA
   end
   box "Sender org"
     participant A as Agency-Local Agent (Extraction + FDE Wrapper)
@@ -157,17 +171,22 @@ sequenceDiagram
   end
 
   R->>R: Generate ephemeral keypair (keep private key)
-  R->>AV: Request authorization for dataset + params
+  R->>CA: TLS identity validation (mTLS)
+  R->>AV: Request authorization for dataset + params (HTTPS)
   AV-->>R: Authorized to deliver to receiver data store (or Denied)
 
   alt Authorized
-    R->>M: Submit authorized job request + receiver public key
+    R->>CA: TLS identity validation (mTLS)
+    R->>M: Submit authorized job request + receiver public key (HTTPS)
+    M->>CA: TLS identity validation (mTLS)
     M->>A: Trigger extraction job (HTTPS) + receiver public key
     A->>A: Extract data from agency source system
     A->>A: Compress + Encrypt to receiver public key
     A->>SMS: Write encrypted artifact(s) + manifest
-    A->>AV: Delivery-time authorization check
-    AV-->>A: Approved (or Denied)
+    A->>R: Delivery attempt (HTTPS)
+    R->>CA: TLS identity validation (mTLS)
+    R->>AV: Delivery-time authZ check (HTTPS)
+    AV-->>R: Approved (or Denied)
     A->>R: Transfer encrypted artifacts and manifest via SSH protocol
     R->>RMS: Write encrypted artifacts and manifest to mounted storage
     M->>M: Track status/metadata (scheduling/monitoring)
@@ -183,6 +202,7 @@ flowchart LR
   subgraph ControlPlane[Control-plane]
     AV[Access Validation / Agreement Store]
     M["Mage: Central Scheduler and Monitor"]
+    CA[Keystore Certificates / Private CA]
   end
 
   subgraph SenderOrg[Sender org]
@@ -219,6 +239,7 @@ sequenceDiagram
   end
   box "GSA control-plane"
     participant AV as Access Validation / Agreement Store
+    participant CA as Keystore Certificates / Private CA
   end
   box "Sender org"
     participant S as Sender (Minimal Service)
@@ -226,15 +247,19 @@ sequenceDiagram
   end
 
   R->>R: Generate ephemeral keypair (keep private key)
-  R->>AV: Request authorization for dataset + params
+  R->>CA: TLS identity validation (mTLS)
+  R->>AV: Request authorization for dataset + params (HTTPS)
   AV-->>R: Authorized to deliver to receiver data store (or Denied)
 
   alt Authorized
-    R->>S: Data request + receiver public key
+    R->>CA: TLS identity validation (mTLS)
+    R->>S: Data request + receiver public key (HTTPS)
     S->>SRC: Fetch or query requested data
     S->>S: Compress + Encrypt to receiver public key
-    S->>AV: Delivery-time authorization check
-    AV-->>S: Approved (or Denied)
+    S->>R: Delivery attempt (HTTPS)
+    R->>CA: TLS identity validation (mTLS)
+    R->>AV: Delivery-time authZ check (HTTPS)
+    AV-->>R: Approved (or Denied)
     S-->>R: Transfer encrypted payload via SSH protocol
     R->>RMS: Write encrypted payload to mounted storage
   else Denied
@@ -249,6 +274,7 @@ flowchart LR
   subgraph DataPlane[Data-plane]
     R4[Receiver Minimal Service]
     AV4[Access Validation / Agreement Store]
+    CA4[Keystore Certificates / Private CA]
     S4[Sender Minimal Service]
     SRC4[(Source System)]
     RMS4[(Receiver Mounted Storage<br/>Encrypted Temporary Landing)]
