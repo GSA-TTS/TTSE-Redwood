@@ -345,3 +345,82 @@ flowchart LR
  S4 -->|Transfer via rsync over SSH encrypted in transit| R4
  R4 -->|Write payload| RMS4
 ```
+
+
+## Option 5: Apache NiFi MiNiFi C++ as Agency-Local Agent Runtime + HTTPS mTLS Data-plane Transfer
+
+
+### Sequence diagram
+
+
+```mermaid
+sequenceDiagram
+  autonumber
+  box "Receiver org"
+    participant RMS as Receiver Mounted Storage<br/>(Encrypted at Rest, Platform-Managed)
+    participant R as Receiver Agent (MiNiFi-enabled)
+  end
+  box "GSA control-plane"
+    participant AV as Access Validation / Agreement Store
+    participant N as NiFi Policy Validation/Enforcement
+    participant CA as Keystore Certificates / Private CA
+  end
+  box "Sender org"
+    participant S as Sender Agent (MiNiFi-enabled)
+    participant SMS as Sender Mounted Storage<br/>(Encrypted at Rest, Platform-Managed)
+  end
+
+  R->>CA: TLS identity validation (mTLS)
+  R->>S: Data request + identity proof (HTTPS)
+  S->>CA: TLS identity validation (mTLS)
+  S->>N: Submit request for schema validation (HTTPS)
+  N->>AV: AuthZ decision check (HTTPS)
+  AV-->>N: Authorized (or Denied)
+  N-->>S: Allow (or Deny)
+
+  alt Authorized
+    S->>S: Execute MiNiFi flow to extract and package artifacts
+    S->>SMS: Write artifacts + manifest to mounted storage
+    S->>R: Delivery attempt (HTTPS)
+    R->>CA: TLS identity validation (mTLS)
+    R->>AV: Delivery-time authZ check (HTTPS)
+    AV-->>R: Approved (or Denied)
+    S->>R: Transfer artifacts + manifest via HTTPS mTLS encrypted in transit
+    R->>RMS: Write artifacts + manifest to mounted storage
+  else Denied
+    S-->>R: Denied / error response
+  end
+```
+
+
+### Component diagram
+
+
+```mermaid
+flowchart LR
+  subgraph ControlPlane5[Control-plane]
+    AV5[Access Validation / Agreement Store]
+    N5[NiFi Policy Validation/Enforcement]
+    CA5[Keystore Certificates / Private CA]
+  end
+
+  subgraph SenderOrg5[Sender org]
+    S5[Sender Agent: MiNiFi C++]
+    SRC5[(Agency Data Source)]
+    SMS5[(Sender Mounted Storage<br/>Encrypted at Rest, Platform-Managed)]
+  end
+
+  subgraph ReceiverOrg5[Receiver org]
+    RMS5[(Receiver Mounted Storage<br/>Encrypted at Rest, Platform-Managed + Manifest)]
+    R5[Receiver Agent: MiNiFi C++]
+  end
+
+  R5 -->|Request + identity HTTPS mTLS| S5
+  S5 -->|Schema validate HTTPS mTLS| N5
+  N5 -->|AuthZ decision check HTTPS mTLS| AV5
+  S5 -->|Extract| SRC5
+  S5 -->|Write artifacts + manifest| SMS5
+  S5 -->|Transfer via HTTPS mTLS encrypted in transit| R5
+  R5 -->|Delivery-time authZ check HTTPS mTLS| AV5
+  R5 -->|Write artifacts + manifest| RMS5
+```
