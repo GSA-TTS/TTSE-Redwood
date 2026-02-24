@@ -1,6 +1,6 @@
-# TTSE Data Adapter
+# TTSE Data Agent
 
-This repository contains the TTSE Federal Data Exchange (FDE) adapter implementation and supporting design artifacts.
+This repository contains the TTSE Federal Data Exchange (FDE) agent implementation and supporting design artifacts.
 
 The repository is intentionally bootstrapped with a minimal structure; implementation details will evolve via ADRs.
 
