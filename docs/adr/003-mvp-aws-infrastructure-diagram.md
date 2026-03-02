@@ -233,6 +233,16 @@ flowchart LR
 ---
 
 
+## AWS Cost Analysis
+
+[AWS Pricing Calculator estimate](https://calculator.aws/#/estimate?id=1036da16de78ad67180636ba55b59a4762963f4f) — rough MVP cost model for the services in the diagrams (ECS/Fargate, Transfer Family, S3, NAT, logging) to support sizing and tradeoff discussions.
+Note: this estimate does not include EFS because we (as developers) plan to start with AWS Transfer Family backed by S3 rather than EFS.
+
+
+
+---
+
+
 ## IAM Roles & Policies (Summary)
 
 
