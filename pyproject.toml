@@ -1,0 +1,31 @@
+# Build backend
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Project metadata
+[project]
+name = "redwood-dataagent"
+version = "0.1.0"
+description = "TTSE Redwood Data Agent MVP foundation"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+# Optional dependencies
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0.0",
+]
+
+# Setuptools src layout
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+# Package discovery
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Pytest defaults
+[tool.pytest.ini_options]
+testpaths = ["tests"]

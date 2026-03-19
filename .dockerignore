@@ -1,0 +1,13 @@
+# Git metadata
+.git
+
+# Test and Python cache files
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Local virtualenv and tests
+.venv
+tests
