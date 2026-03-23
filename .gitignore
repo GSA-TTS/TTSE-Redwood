@@ -28,6 +28,7 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+SESSION*
 
 # Local env files
 .env
