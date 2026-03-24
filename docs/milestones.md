@@ -2,22 +2,22 @@
 
 ## Day 1: Foundation (Sprint 1)
 
-### Milestone 0.1: Core Agent Framework
+### Milestone 0.1: Development Environment
+- ✓ Docker containers for agent components
+- Development certificates for encryption testing
+- Integration test framework
+- ✓ Local file system test directories
+- ✓ S3 environment
+- ✓ Data encryption at rest
+
+### Milestone 0.2: Core Agent Framework
 - ✓ Basic agent skeleton with stub methods
 - ✓ S3 bucket monitoring capability
 - ✓ Logging infrastructure
 - ✓ Basic console/file-based event logging (temporary until Kafka)
 - ✓ Configuration management
 - ✓ Basic error handling and recovery
-
-### Milestone 0.2: Development Environment
-- ✓ Docker containers for agent components
-- ✓ Mock OPA policy server
-- Development certificates for mTLS testing
-- Integration test framework
-- ✓ Local file system test directories
-- ✓ S3 environment
-- ✓ Data encryption at rest
+- ✓ Basic eencryption in transit and at rest
 
 ## Phase 1: Core Integration (Sprint 2)
 
