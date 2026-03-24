@@ -10,7 +10,7 @@
 - ✓ Configuration management
 - ✓ Basic error handling and recovery
 
-### Milestone 0.3: Development Environment
+### Milestone 0.2: Development Environment
 - ✓ Docker containers for agent components
 - ✓ Mock OPA policy server
 - Development certificates for mTLS testing
