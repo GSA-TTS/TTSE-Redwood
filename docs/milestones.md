@@ -41,7 +41,7 @@
 - Event serialization/deserialization
 - Dead letter topic configuration
 
-## Phase 2: Core Integration (sprint 3 & 4)
+## Phase 2: Core Integration (Sprint 3 & 4)
 
 ### Milestone 2.1: Request Management System
 - REST API for receiving data requests
