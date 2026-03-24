@@ -1,8 +1,8 @@
 # Inter-Agency Data Exchange System Milestones
 
-## Phase 1: Foundation (Weeks 1-4)
+## Day 1: Foundation (Sprint 1)
 
-### Milestone 1.1: Core Agent Framework
+### Milestone 0.1: Core Agent Framework
 - ✓ Basic agent skeleton with stub methods
 - ✓ S3 bucket monitoring capability
 - ✓ Logging infrastructure
@@ -10,15 +10,7 @@
 - ✓ Configuration management
 - ✓ Basic error handling and recovery
 
-### Milestone 1.2: Secure Transport Layer
-- ✓ PKI/mTLS implementation for data transfer
-- ✓ Certificate management structure
-<!-- - ✓ Basic REST API endpoints for receiving data -->
-- ✓ Health check and status endpoints
-- ✓ SSL/TLS context management
-- ✓ Certificate validation and renewal alerts
-
-### Milestone 1.3: Development Environment
+### Milestone 0.3: Development Environment
 - ✓ Docker containers for agent components
 - ✓ Mock OPA policy server
 - Development certificates for mTLS testing
@@ -27,7 +19,17 @@
 - ✓ S3 environment
 - ✓ Data encryption at rest
 
-### Milestone 1.4: Kafka Event Streaming Platform
+## Phase 1: Core Integration (Sprint 2)
+
+### Milestone 1.1: Secure Transport Layer
+-  PKI/mTLS implementation for data transfer
+-  Certificate management structure
+<!-- - ✓ Basic REST API endpoints for receiving data -->
+-  Health check and status endpoints
+-  SSL/TLS context management
+-  Certificate validation and renewal alerts
+
+### Milestone 1.2: Kafka Event Streaming Platform
 - Kafka cluster setup 
 - Schema registry deployment
 - Event schema definitions
@@ -39,7 +41,7 @@
 - Event serialization/deserialization
 - Dead letter topic configuration
 
-## Phase 2: Core Integration (Weeks 5-8)
+## Phase 2: Core Integration (sprint 3 & 4)
 
 ### Milestone 2.1: Request Management System
 - REST API for receiving data requests
@@ -62,7 +64,7 @@
 - Dead letter queue handling
 - Event replay capability
 
-## Phase 3: Data Handling (Weeks 9-12)
+## Phase 3: Data Handling (Sprint 5 & 6)
 
 ### Milestone 3.1: Data Extraction Engine
 - File type detection and validation
@@ -86,7 +88,7 @@
 - Data retention policies
 - Storage cleanup automation
 
-## Phase 4: Advanced Features (Weeks 13-16)
+## Phase 4: Advanced Features (Sprint 7 & 8)
 
 ### Milestone 4.1: Request Orchestration
 - Multi-step request workflows
@@ -108,7 +110,7 @@
 - Performance metrics
 - SLA tracking
 
-## Phase 5: Production Readiness (Weeks 17-20)
+## Phase 5: Production Readiness (SPrint 9 & 10)
 
 ### Milestone 5.1: High Availability
 - Agent clustering support
@@ -131,7 +133,7 @@
 - Compliance dashboards
 - Policy compliance checking
 
-## Phase 6: Enterprise Features (Weeks 21-24)
+## Phase 6: Enterprise Features (Sprint 11 & 12)
 
 ### Milestone 6.1: Advanced Policy Management
 - Dynamic policy updates
