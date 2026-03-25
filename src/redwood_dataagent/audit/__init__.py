@@ -12,17 +12,35 @@ Day 1 events (see audit/events.py):
 Outcomes: SUCCESS, PARTIAL, FAILURE
 
 Example usage:
-    from redwood_dataagent.audit.events import AuditEvent, AuditEventType, EventOutcome
+    from redwood_dataagent.audit import (
+        AuditEventType,
+        EventOutcome,
+        log_pipeline_start,
+        log_extract_data,
+        log_pipeline_complete,
+    )
     
-    event = AuditEvent(
-        event_type=AuditEventType.PIPELINE_START,
+    # Emit audit events for pipeline execution
+    log_pipeline_start(
         transfer_session_id="transfer-001",
         sender_agency="dot",
         receiver_agency="gsa",
-        stage="sender",
-        outcome=EventOutcome.SUCCESS
     )
-    log_entry = event.to_structured_log()
+    
+    log_extract_data(
+        transfer_session_id="transfer-001",
+        sender_agency="dot",
+        receiver_agency="gsa",
+        outcome=EventOutcome.SUCCESS,
+        details={"file_count": 42},
+    )
+    
+    log_pipeline_complete(
+        transfer_session_id="transfer-001",
+        sender_agency="dot",
+        receiver_agency="gsa",
+        outcome=EventOutcome.SUCCESS,
+    )
 """
 
 from redwood_dataagent.audit.events import (
@@ -30,9 +48,37 @@ from redwood_dataagent.audit.events import (
     AuditEventType,
     EventOutcome,
 )
+from redwood_dataagent.audit.logger import (
+    log_event,
+    log_pipeline_start,
+    log_extract_data,
+    log_policy_check,
+    log_compress,
+    log_manifest_created,
+    log_sftp_transfer_start,
+    log_sftp_transfer_complete,
+    log_validate_manifest,
+    log_decompress,
+    log_store_data,
+    log_pipeline_complete,
+)
 
 __all__ = [
+    # Event models and types
     "AuditEvent",
     "AuditEventType",
     "EventOutcome",
+    # Logger functions
+    "log_event",
+    "log_pipeline_start",
+    "log_extract_data",
+    "log_policy_check",
+    "log_compress",
+    "log_manifest_created",
+    "log_sftp_transfer_start",
+    "log_sftp_transfer_complete",
+    "log_validate_manifest",
+    "log_decompress",
+    "log_store_data",
+    "log_pipeline_complete",
 ]
