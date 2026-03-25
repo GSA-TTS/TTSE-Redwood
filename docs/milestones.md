@@ -17,7 +17,7 @@
 - ✓ Basic console/file-based event logging (temporary until Kafka)
 - ✓ Configuration management
 - ✓ Basic error handling and recovery
-- ✓ Basic eencryption in transit and at rest
+- ✓ Basic encryption in transit and at rest
 
 ## Phase 1: Core Integration (Sprint 2)
 
