@@ -10,7 +10,9 @@ version = "0.1.0"
 description = "TTSE Redwood Data Agent MVP foundation"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "pydantic>=2.7.0",
+]
 
 # Optional dependencies
 [project.optional-dependencies]
