@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "pytest>=8.0.0",
+  "pytest-cov>=5.0.0",
 ]
 
 # Setuptools src layout
@@ -31,3 +32,9 @@ where = ["src"]
 # Pytest defaults
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=src/redwood_dataagent --cov-report=xml:coverage/coverage.xml --cov-report=term-missing"
+
+# Coverage source paths are relative to the working directory so they survive
+# docker cp and remain resolvable by SonarQube in the Jenkins workspace.
+[tool.coverage.run]
+relative_files = true

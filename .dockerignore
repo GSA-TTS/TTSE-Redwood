@@ -8,6 +8,8 @@ __pycache__
 *.pyo
 *.pyd
 
-# Local virtualenv and tests
+# Local virtualenv
 .venv
-tests
+
+# Generated coverage artifacts (produced inside the test stage, not from local disk)
+coverage
