@@ -9,6 +9,7 @@ venv/
 env/
 
 # Test and coverage
+coverage/
 .pytest_cache/
 .coverage
 .coverage.*
