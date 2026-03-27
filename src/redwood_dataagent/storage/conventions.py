@@ -23,6 +23,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+_BLANK_PATH_COMPONENT_MSG = "path component cannot be blank"
+
 
 class StoragePurpose(str, Enum):
     """Storage purposes in the Day 1 transfer pipeline."""
@@ -50,7 +52,7 @@ class SenderStoragePath(BaseModel):
     def validate_path_components(cls, value: str) -> str:
         """Disallow blank path components after trimming whitespace."""
         if not value.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         return value
 
     @staticmethod
@@ -75,9 +77,9 @@ class SenderStoragePath(BaseModel):
             "transfers/transfer-001/data.tar.gz"
         """
         if not transfer_session_id or not transfer_session_id.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         if not file_name or not file_name.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         
         return f"transfers/{transfer_session_id.strip()}/{file_name.strip()}"
 
@@ -95,7 +97,7 @@ class ReceiverStoragePath(BaseModel):
     def validate_path_components(cls, value: str) -> str:
         """Disallow blank path components after trimming whitespace."""
         if not value.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         return value
 
     @staticmethod
@@ -123,9 +125,9 @@ class ReceiverStoragePath(BaseModel):
             "landing/transfer-001/data.tar.gz"
         """
         if not transfer_session_id or not transfer_session_id.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         if not file_name or not file_name.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         
         return f"landing/{transfer_session_id.strip()}/{file_name.strip()}"
 
@@ -154,9 +156,9 @@ class ReceiverStoragePath(BaseModel):
             "extracted/transfer-001/records.csv"
         """
         if not transfer_session_id or not transfer_session_id.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         if not file_name or not file_name.strip():
-            raise ValueError("path component cannot be blank")
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         
         return f"extracted/{transfer_session_id.strip()}/{file_name.strip()}"
 
