@@ -33,6 +33,17 @@ class AgentConfig:
     sender_staging_bucket: str
     receiver_landing_bucket: str
     receiver_target_bucket: str
+    sender_data_file: str | None = None
+
+
+def _get_optional_path(env_var: str) -> str | None:
+    """Return a trimmed optional path value or None when unset/blank."""
+    value = os.getenv(env_var)
+    if value is None:
+        return None
+
+    normalized = value.strip()
+    return normalized or None
 
 
 def load_config() -> AgentConfig:
@@ -61,6 +72,9 @@ def load_config() -> AgentConfig:
         Python logging level string. Defaults to ``"INFO"``.
     TRANSFER_SESSION_ID
         Correlation ID for the current transfer run. Auto-generated when absent.
+    SENDER_DATA_FILE
+        Runtime file path to the sender-provided source data file made available
+        to the sender container. Required for sender-mode Day 1 runs.
 
     Returns
     -------
@@ -111,4 +125,5 @@ def load_config() -> AgentConfig:
         receiver_target_bucket=build_receiver_bucket(
             receiver_agency, environment, "target"
         ),
+        sender_data_file=_get_optional_path("SENDER_DATA_FILE"),
     )

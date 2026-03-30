@@ -12,9 +12,9 @@
 ### Phase 1 Deliverables (MVP)
 - Sender object storage structure and naming conventions (S3, Blob, or equivalent)
 - GSA S3 bucket structure and naming conventions
-- Sender Agent flow: data extraction to S3 staging using a dummy module initially
+- Sender Agent flow: review a sender-owned data file, generate the canonical transfer manifest, compress the payload, and stage artifacts for SFTP
 - Policy approval step using a dummy always-approve decision for v0.01
-- SFTP transfer capability to the receiver side
+- Sender-side SFTP client capability to upload the generated gzip artifact and manifest to the receiver-side SFTP server once packaging is complete
 - AWS infrastructure documentation at naming and interface level
 - Structured audit logging with `transfer_session_id` correlation
 - Configuration management for dynamic sender and receiver agencies
@@ -43,9 +43,10 @@
 │                                                             │
 │  ┌──────────────┐     ┌──────────────────┐                 │
 │  │ Source Data  │────▶│ Sender Agent     │                 │
-│  │ (Mock)       │     │ Container        │                 │
-│  └──────────────┘     │  - Extract       │                 │
+│  │ (Sender S3)  │     │ Container        │                 │
+│  └──────────────┘     │  - Review File   │                 │
 │                       │  - Policy Check  │                 │
+│                       │  - Manifest      │                 │
 │                       │  - Compress      │                 │
 │                       │  - Audit Log     │                 │
 │                       └────────┬─────────┘                 │
@@ -57,8 +58,8 @@
 │  └─────────────────────────────────────────┘               │
 │                                │                           │
 │  ┌──────────────────────────────▼──────────┐               │
-│  │ AWS Transfer Family SFTP Server         │ (SSH Port 22) │
-│  │ (Inbound only - future flexibility)     │               │
+│  │ Sender Packaging Output                 │               │
+│  │ (gzip + manifest ready for transfer)    │               │
 │  └─────────────────────────────────────────┘               │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
@@ -111,12 +112,15 @@
 1. **Sender Storage Event Triggered at DOT**: A file arrives in DOT sender-side object storage (for example S3 Put, Blob created, or equivalent event).
 2. **Sender Event to Sender Agent**: Sender agency configures its own eventing to trigger the Sender Agent container.
 3. **Sender Workflow**:
-   - Extract mock data or read uploaded file
+   - Read the intended sender-owned data file from sender-side object storage
+   - Generate the canonical transfer manifest from the sender data file metadata
    - Perform policy approval using the MVP default approve path
-   - Compress the payload and generate manifest metadata
+   - Generate the canonical manifest metadata required for transfer
+   - Compress the payload into a gzip archive
    - Stage compressed artifacts in sender-side object storage
 4. **SFTP Upload**:
    - Sender connects to GSA's SFTP endpoint as a client
+   - Sender triggers SFTP upload as soon as the gzip artifact is generated and ready
    - Sender uploads compressed data and manifest artifacts
    - Receiver-side SFTP landing writes to GSA S3 landing storage
 5. **Receiver Workflow**:
@@ -184,7 +188,6 @@ gsa-data-dev-target/
 
 | Server | DNS/Hostname | Purpose |
 |--------|--------------|---------|
-| DOT SFTP | `fde-dot-dev-sftp.transfer.amazonaws.com` | Inbound endpoint kept for future flexibility |
 | GSA SFTP | `fde-gsa-dev-sftp.transfer.amazonaws.com` | Day 1 inbound endpoint for files transferred from DOT |
 
 **Configuration:**
@@ -249,25 +252,24 @@ ttse-redwood/
 | Core | `TRANSFER_SESSION_ID` | Correlation identifier for one transfer session |
 | Agency | `SENDER_AGENCY` | Sender agency code |
 | Agency | `RECEIVER_AGENCY` | Receiver agency code |
-| SFTP | `SFTP_HOST` | Receiver-side SFTP endpoint |
-| SFTP | `SFTP_PORT` | SSH and SFTP port |
-| SFTP | `SFTP_USERNAME` | Username used by the sender container |
-| SFTP | `SFTP_PRIVATE_KEY_SECRET_ARN` | Secret location for SSH private key material |
-| S3 | `STAGING_BUCKET` | Sender staging bucket |
-| S3 | `LANDING_BUCKET` | Receiver landing bucket |
-| S3 | `TARGET_BUCKET` | Receiver target bucket |
-| Encryption | `S3_ENCRYPTION_TYPE` | At-rest encryption selection |
-| Encryption | `KMS_KEY_ID` | Optional KMS key reference when using SSE-KMS |
+| Input | `SENDER_DATA_FILE` | Path to the sender-owned source data file used by the sender workflow (required for Day 1 runs) |
+| SFTP | `SFTP_HOST` | Receiver-side SFTP endpoint (follow-up PR scope) |
+| SFTP | `SFTP_PORT` | SSH and SFTP port (follow-up PR scope) |
+| SFTP | `SFTP_USERNAME` | Username used by the sender container (follow-up PR scope) |
+| SFTP | `SFTP_PRIVATE_KEY_SECRET_ARN` | Secret location for SSH private key material (follow-up PR scope) |
+| Encryption | `S3_ENCRYPTION_TYPE` | At-rest encryption selection (follow-up PR scope) |
+| Encryption | `KMS_KEY_ID` | Optional KMS key reference when using SSE-KMS (follow-up PR scope) |
 | Policy | `POLICY_APPROVAL_ENDPOINT` | Future integration point for real policy evaluation |
 
 ### Runtime Configuration Scope
 
-The runtime configuration should capture:
+The full Day 1 target runtime configuration should capture:
 
 - agent mode, tenant, environment, region, and log level
 - sender and receiver agency identifiers
+- sender data file reference (required for sender-mode Day 1 execution)
 - SFTP endpoint, port, username, and secret reference for SSH credentials
-- staging, landing, and target bucket names
+- derived staging, landing, and target bucket names
 - encryption mode and optional KMS key reference
 - transfer session identifier for audit correlation
 
@@ -296,8 +298,12 @@ The runtime configuration should capture:
 ### 6.2 Sender Workflow
 
 #### Extraction
-- Generates dummy CSV or JSON payloads for initial testing
-- Evolves later to pull from sender-side source systems and databases
+- Reviews the sender-owned input file selected for transfer
+- Keeps extraction as a future hook and requires a sender-provided data file for Day 1 runs
+
+#### Sender Manifest Generation
+- Generates the canonical transfer manifest from sender payload metadata produced by the sender workflow
+- Uses the generated manifest as the transfer metadata source for packaging and handoff
 
 #### Policy Approval
 - Initial behavior is unconditional approval
@@ -306,11 +312,12 @@ The runtime configuration should capture:
 #### Compression and Manifest Creation
 - Compresses payloads using gzip
 - Calculates SHA-256 checksums
-- Produces manifest metadata describing file names, sizes, and checksums
+- Produces the canonical manifest metadata describing file names, sizes, and checksums
 
 #### SFTP Transfer
 - Connects from sender to receiver-side SFTP endpoint
 - Uses SSH-based transport for encryption in transit
+- Starts immediately after the gzip artifact is created and staged for transfer
 - Uploads compressed data and manifest artifacts to receiver landing storage
 
 #### Sender Triggering Assumption (Day 1)
@@ -325,7 +332,7 @@ The runtime configuration should capture:
 #### Manifest Validation
 - Reads manifest metadata from landing storage
 - Recomputes SHA-256 checksums for transferred files
-- Confirms transferred payloads match sender-provided manifest values
+- Confirms transferred payloads match canonical manifest values generated by the sender workflow
 
 #### Decompression
 - Extracts gzip-compressed artifacts after validation succeeds
@@ -430,9 +437,9 @@ Note: this sequence is intentionally high level and can be adjusted as implement
 
 ### Phase 1B: Sender Trigger and Sender Workflow
 - Define sender-side trigger assumption and integration point from sender object storage to sender container runtime
-- Implement mock extraction or input-file pickup at sender side
+- Implement sender-owned file pickup and review at sender side; Day 1 sender runs require a sender-provided data file
 - Implement always-approve policy step for MVP
-- Implement compression and manifest creation
+- Implement canonical sender-manifest creation from sender payload metadata
 - Implement handoff from sender staging storage to SFTP upload path
 
 ### Phase 1C: GSA Landing and Receiver Workflow
@@ -509,7 +516,7 @@ Test dependencies:
 MVP Day 1 is complete when:
 
 1. Sender-side storage event (S3 Put, Blob created, or equivalent) triggers the Sender Agent container, configured by sender agency.
-2. Sender workflow completes mock extraction, policy approval, compression, and staging.
+2. Sender workflow completes sender file review, policy approval, canonical manifest creation, compression, and staging.
 3. SFTP transfer uploads compressed data from sender staging to GSA's SFTP endpoint.
 4. GSA S3 Put event on landing bucket triggers receiver workflow to validate manifest metadata, decompress payloads, and store data to the receiver target bucket.
 5. Day 1 audit events are emitted with the correct `transfer_session_id`.
