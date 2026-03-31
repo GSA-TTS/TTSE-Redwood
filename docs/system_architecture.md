@@ -12,10 +12,10 @@
      |   Login.gov    |   Request   | (Access Control,  | Validation  | (Data Extractor|
      |                |    Auth     |  Validation Rules)| Requests    |  & Sender)     |
      +----------------+             +-------------------+             +----------------+
-             ^                              ^      ^                          |
-             | Submit Request               |      | Orchestration/Commands   | Data Transfer
-             | (Secure)                     |      | (Secure)                 | (Secure)
-             V                              V      V                          V
+                                            ^      ^                          |
+                                            |      | Orchestration/Commands   | Data Transfer
+                                            |      | (Secure)                 | (Secure)
+                                            V      V                          V
      +----------------+             +-------------------+             +----------------+
      |  Event Server  |<--------------------------------------------->|    Agent B     |
      | (Orchestration,|                                               | (Data Receiver |
