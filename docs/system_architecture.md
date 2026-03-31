@@ -1,28 +1,6 @@
 ### Architecture Diagram: Controlled Data Sharing System
-                                      +-----------------+ 
-                                      |   PKI Server    |
-                                      | (Certificates,  |
-                                      | Key Management) |
-                                      +-----------------+
-                                             |
-                                             | (Provides secure communication infrastructure - TLS/SSL)
-                                             V
-     +----------------+             +-------------------+             +----------------+
-     |                |<----------->|   Policy Server   |<----------->|    Agent A     |
-     |   Login.gov    |   Request   | (Access Control,  | Validation  | (Data Extractor|
-     |                |    Auth     |  Validation Rules)| Requests    |  & Sender)     |
-     +----------------+             +-------------------+             +----------------+
-                                            ^      ^                          |
-                                            |      | Orchestration/Commands   | Data Transfer
-                                            |      | (Secure)                 | (Secure)
-                                            V      V                          V
-     +----------------+             +-------------------+             +----------------+
-     |  Event Server  |<--------------------------------------------->|    Agent B     |
-     | (Orchestration,|                                               | (Data Receiver |
-     |  Audit Log)    |                                               |  & Processor)  |
-     +----------------+                                               +----------------+
 
-     (Note: Agent A and Agent B represent multiple agents deployed at different agencies.)
+<img width="960" height="720" alt="Redwood System Architecture" src="https://github.com/user-attachments/assets/e43fe749-0d4d-421c-a814-b293236e5b2c" />
 
 
 ### Component Descriptions
