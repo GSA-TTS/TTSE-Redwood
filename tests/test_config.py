@@ -21,6 +21,7 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "ENVIRONMENT",
         "AWS_REGION",
         "LOG_LEVEL",
+        "SENDER_DATA_FILE",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -43,6 +44,7 @@ def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.aws_region == "us-east-1"
     assert config.log_level == "INFO"
     assert config.transfer_session_id  # auto-generated UUID is non-empty
+    assert config.sender_data_file is None
 
 
 def test_load_config_returns_agent_config_instance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,6 +287,16 @@ def test_load_config_log_level_normalised_to_uppercase(
     config = load_config()
 
     assert config.log_level == "DEBUG"
+
+
+def test_load_config_optional_file_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Optional file path settings are trimmed and stored when configured."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("SENDER_DATA_FILE", " /tmp/source.json ")
+
+    config = load_config()
+
+    assert config.sender_data_file == "/tmp/source.json"
 
 
 # ---------------------------------------------------------------------------

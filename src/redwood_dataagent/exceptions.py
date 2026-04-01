@@ -106,3 +106,18 @@ class EncryptionError(RedwoodDataAgentException):
     TODO: Add key rotation support
     """
     pass
+
+
+class PolicyApprovalError(RedwoodDataAgentException):
+    """
+    Raised when policy approval evaluation fails or is denied.
+    
+    This includes:
+    - Invalid sender/receiver agency codes
+    - Policy validation failures
+    - Transfer compliance rejections
+    - Malformed policy request parameters
+    
+    TODO: Add detailed policy rejection reasons for audit trail
+    """
+    pass
