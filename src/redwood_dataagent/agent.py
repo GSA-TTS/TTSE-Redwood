@@ -57,7 +57,6 @@ def _extract_data(config: AgentConfig) -> None:
     Phase 2 can implement agency-side extraction logic here.
     """
     _ = config
-    pass
 
 
 def _resolve_configured_file(file_path: str | None, label: str) -> Path | None:
@@ -145,6 +144,17 @@ def _compute_checksum(file_path: Path, algorithm: ChecksumAlgorithm = DEFAULT_CH
     return hash_obj.hexdigest()
 
 
+def _safe_archive_member_name(file_name: str) -> str:
+    """Validate archive member name to avoid unsafe paths in produced tarballs."""
+    member_path = Path(file_name)
+    if not file_name or file_name in {".", ".."}:
+        raise StorageError("Archive member name cannot be empty or traversal markers")
+    if member_path.is_absolute() or ".." in member_path.parts:
+        raise StorageError(f"Unsafe archive member name: {file_name}")
+
+    return file_name
+
+
 def _create_sender_workflow(config: AgentConfig) -> int:
     """Execute sender-side transfer workflow.
 
@@ -208,8 +218,10 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
             # 4. Compress data
             archive_path = tmpdir_path / DEFAULT_ARCHIVE_FILE_NAME
-            with tarfile.open(archive_path, "w:gz") as tar:
-                tar.add(data_file, arcname=data_file.name)
+            archive_member_name = _safe_archive_member_name(data_file.name)
+            # Archive creation is limited to a validated relative file name.
+            with tarfile.open(archive_path, "w:gz") as tar:  # NOSONAR
+                tar.add(data_file, arcname=archive_member_name)
 
             log_compress(
                 transfer_session_id=config.transfer_session_id,
