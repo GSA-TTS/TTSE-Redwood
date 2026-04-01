@@ -38,23 +38,23 @@ class TestBuildSenderBucket:
     def test_basic_bucket_name(self):
         """Verify basic sender bucket naming."""
         bucket = build_sender_bucket("dot", "dev", StoragePurpose.STAGING)
-        assert bucket == "dot-data-dev-staging"
+        assert bucket == "tts-core-dev-dot-data-staging"
 
     def test_case_insensitive_agency(self):
         """Verify agency name is lowercased."""
         bucket = build_sender_bucket("DOT", "dev", StoragePurpose.STAGING)
-        assert bucket == "dot-data-dev-staging"
+        assert bucket == "tts-core-dev-dot-data-staging"
 
     def test_case_insensitive_environment(self):
         """Verify environment is lowercased."""
         bucket = build_sender_bucket("dot", "PROD", StoragePurpose.STAGING)
-        assert bucket == "dot-data-prod-staging"
+        assert bucket == "tts-core-prod-dot-data-staging"
 
     def test_all_purposes(self):
         """Verify bucket name for all storage purposes."""
         for purpose in StoragePurpose:
             bucket = build_sender_bucket("faa", "staging", purpose)
-            assert bucket == f"faa-data-staging-{purpose.value}"
+            assert bucket == f"tts-core-staging-faa-data-{purpose.value}"
 
     def test_blank_agency_raises(self):
         """Verify blank agency raises ValueError."""
@@ -83,27 +83,27 @@ class TestBuildReceiverBucket:
     def test_landing_bucket_name(self):
         """Verify receiver landing bucket naming."""
         bucket = build_receiver_bucket("gsa", "dev", "landing")
-        assert bucket == "gsa-data-dev-landing"
+        assert bucket == "tts-core-dev-gsa-data-landing"
 
     def test_target_bucket_name(self):
         """Verify receiver target bucket naming."""
         bucket = build_receiver_bucket("gsa", "prod", "target")
-        assert bucket == "gsa-data-prod-target"
+        assert bucket == "tts-core-prod-gsa-data-target"
 
     def test_case_insensitive_agency(self):
         """Verify agency name is lowercased."""
         bucket = build_receiver_bucket("GSA", "dev", "landing")
-        assert bucket == "gsa-data-dev-landing"
+        assert bucket == "tts-core-dev-gsa-data-landing"
 
     def test_case_insensitive_environment(self):
         """Verify environment is lowercased."""
         bucket = build_receiver_bucket("gsa", "STAGING", "landing")
-        assert bucket == "gsa-data-staging-landing"
+        assert bucket == "tts-core-staging-gsa-data-landing"
 
     def test_case_insensitive_purpose(self):
         """Verify purpose is lowercased."""
         bucket = build_receiver_bucket("gsa", "dev", "LANDING")
-        assert bucket == "gsa-data-dev-landing"
+        assert bucket == "tts-core-dev-gsa-data-landing"
 
     def test_blank_agency_raises(self):
         """Verify blank agency raises ValueError."""
@@ -260,7 +260,7 @@ class TestStorageConventionsIntegration:
         agency = "dot"
         env = "dev"
         bucket = build_sender_bucket(agency, env, StoragePurpose.STAGING)
-        assert bucket == "dot-data-dev-staging"
+        assert bucket == "tts-core-dev-dot-data-staging"
 
         session_id = "transfer-20260324-001"
         data_path = SenderStoragePath.transfers(session_id, "data.tar.gz")
@@ -276,8 +276,8 @@ class TestStorageConventionsIntegration:
         landing_bucket = build_receiver_bucket(agency, env, "landing")
         target_bucket = build_receiver_bucket(agency, env, "target")
 
-        assert landing_bucket == "gsa-data-dev-landing"
-        assert target_bucket == "gsa-data-dev-target"
+        assert landing_bucket == "tts-core-dev-gsa-data-landing"
+        assert target_bucket == "tts-core-dev-gsa-data-target"
 
         session_id = "transfer-20260324-001"
         inbound_path = ReceiverStoragePath.landing(session_id, "data.tar.gz")
@@ -292,8 +292,8 @@ class TestStorageConventionsIntegration:
         dot_bucket = build_sender_bucket("dot", "dev", StoragePurpose.STAGING)
         faa_bucket = build_sender_bucket("faa", "dev", StoragePurpose.STAGING)
 
-        assert dot_bucket == "dot-data-dev-staging"
-        assert faa_bucket == "faa-data-dev-staging"
+        assert dot_bucket == "tts-core-dev-dot-data-staging"
+        assert faa_bucket == "tts-core-dev-faa-data-staging"
         assert dot_bucket != faa_bucket
 
     def test_multi_environment_isolation(self):
@@ -301,8 +301,8 @@ class TestStorageConventionsIntegration:
         dev_bucket = build_sender_bucket("dot", "dev", StoragePurpose.STAGING)
         prod_bucket = build_sender_bucket("dot", "prod", StoragePurpose.STAGING)
 
-        assert dev_bucket == "dot-data-dev-staging"
-        assert prod_bucket == "dot-data-prod-staging"
+        assert dev_bucket == "tts-core-dev-dot-data-staging"
+        assert prod_bucket == "tts-core-prod-dot-data-staging"
         assert dev_bucket != prod_bucket
 
     def test_multi_purpose_isolation(self):
@@ -313,6 +313,6 @@ class TestStorageConventionsIntegration:
         landing_bucket = build_receiver_bucket("gsa", "dev", "landing")
         target_bucket = build_receiver_bucket("gsa", "dev", "target")
 
-        assert landing_bucket == "gsa-data-dev-landing"
-        assert target_bucket == "gsa-data-dev-target"
+        assert landing_bucket == "tts-core-dev-gsa-data-landing"
+        assert target_bucket == "tts-core-dev-gsa-data-target"
         assert landing_bucket != target_bucket

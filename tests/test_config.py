@@ -165,7 +165,7 @@ def test_load_config_sender_staging_bucket_defaults(monkeypatch: pytest.MonkeyPa
 
     config = load_config()
 
-    assert config.sender_staging_bucket == "dot-data-development-staging"
+    assert config.sender_staging_bucket == "tts-core-development-dot-data-staging"
 
 
 def test_load_config_receiver_landing_bucket_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -174,7 +174,7 @@ def test_load_config_receiver_landing_bucket_defaults(monkeypatch: pytest.Monkey
 
     config = load_config()
 
-    assert config.receiver_landing_bucket == "gsa-data-development-landing"
+    assert config.receiver_landing_bucket == "tts-core-development-gsa-data-landing"
 
 
 def test_load_config_receiver_target_bucket_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,7 +183,7 @@ def test_load_config_receiver_target_bucket_defaults(monkeypatch: pytest.MonkeyP
 
     config = load_config()
 
-    assert config.receiver_target_bucket == "gsa-data-development-target"
+    assert config.receiver_target_bucket == "tts-core-development-gsa-data-target"
 
 
 def test_load_config_buckets_reflect_custom_agencies(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -195,9 +195,9 @@ def test_load_config_buckets_reflect_custom_agencies(monkeypatch: pytest.MonkeyP
 
     config = load_config()
 
-    assert config.sender_staging_bucket == "faa-data-prod-staging"
-    assert config.receiver_landing_bucket == "dot-data-prod-landing"
-    assert config.receiver_target_bucket == "dot-data-prod-target"
+    assert config.sender_staging_bucket == "tts-core-prod-faa-data-staging"
+    assert config.receiver_landing_bucket == "tts-core-prod-dot-data-landing"
+    assert config.receiver_target_bucket == "tts-core-prod-dot-data-target"
 
 
 def test_load_config_environment_propagates_to_all_buckets(
@@ -230,9 +230,9 @@ def test_load_config_day1_dot_to_gsa_scenario(monkeypatch: pytest.MonkeyPatch) -
     assert config.receiver_agency == "gsa"
     assert config.environment == "dev"
     assert config.transfer_session_id == "transfer-20260327-001"
-    assert config.sender_staging_bucket == "dot-data-dev-staging"
-    assert config.receiver_landing_bucket == "gsa-data-dev-landing"
-    assert config.receiver_target_bucket == "gsa-data-dev-target"
+    assert config.sender_staging_bucket == "tts-core-dev-dot-data-staging"
+    assert config.receiver_landing_bucket == "tts-core-dev-gsa-data-landing"
+    assert config.receiver_target_bucket == "tts-core-dev-gsa-data-target"
 
 
 # ---------------------------------------------------------------------------

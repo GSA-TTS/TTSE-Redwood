@@ -6,7 +6,7 @@ MVP Implementation Plan. All storage references follow agency-prefixed,
 environment-specific, purpose-defined naming to ensure clear operational
 semantics and multi-tenant isolation.
 
-Storage Pattern: {agency}-data-{environment}-{purpose}
+Storage Pattern: tts-core-{environment}-{agency}-data-{purpose}
 
 Supported purposes:
 - staging: Sender-side artifact staging during transfer preparation
@@ -169,7 +169,7 @@ def build_sender_bucket(
     """
     Build a sender-side storage bucket name.
 
-    Pattern: {agency}-data-{environment}-{purpose}
+    Pattern: tts-core-{environment}-{agency}-data-{purpose}
 
     Sender storage is used by the source agency (e.g., DOT) to stage transfer
     artifacts before sending to the receiver.
@@ -187,14 +187,14 @@ def build_sender_bucket(
 
     Example:
         >>> build_sender_bucket("dot", "dev", StoragePurpose.STAGING)
-        "dot-data-dev-staging"
+        "tts-core-dev-dot-data-staging"
     """
     if not agency.strip():
         raise ValueError("agency cannot be blank")
     if not environment.strip():
         raise ValueError("environment cannot be blank")
 
-    return f"{agency.lower()}-data-{environment.lower()}-{purpose.value}"
+    return f"tts-core-{environment.strip().lower()}-{agency.strip().lower()}-data-{purpose.value}"
 
 
 def build_receiver_bucket(
@@ -203,7 +203,7 @@ def build_receiver_bucket(
     """
     Build a receiver-side storage bucket name.
 
-    Pattern: {agency}-data-{environment}-{purpose}
+    Pattern: tts-core-{environment}-{agency}-data-{purpose}
 
     Receiver storage (typically GSA) includes landing zones for inbound transfers
     and target storage for validated, extracted data.
@@ -221,10 +221,10 @@ def build_receiver_bucket(
 
     Example:
         >>> build_receiver_bucket("gsa", "dev", "landing")
-        "gsa-data-dev-landing"
+        "tts-core-dev-gsa-data-landing"
         
         >>> build_receiver_bucket("gsa", "prod", "target")
-        "gsa-data-prod-target"
+        "tts-core-prod-gsa-data-target"
     """
     if not agency.strip():
         raise ValueError("agency cannot be blank")
@@ -235,4 +235,4 @@ def build_receiver_bucket(
     if purpose_lower not in ("landing", "target"):
         raise ValueError('purpose must be either "landing" or "target"')
 
-    return f"{agency.lower()}-data-{environment.lower()}-{purpose_lower}"
+    return f"tts-core-{environment.strip().lower()}-{agency.strip().lower()}-data-{purpose_lower}"
