@@ -137,22 +137,22 @@ Note: For Day 1 planning, these naming conventions are GSA-proposed standards th
 
 ### Sender Storage (Cloud-Agnostic)
 
-**Pattern:** `{agency}-data-{environment}-{purpose}`
+**Pattern:** `tts-core-{environment}-{agency}-data-{purpose}`
 
 Examples:
 
-- AWS S3: `dot-data-dev-staging`
-- Azure Blob container: `dot-data-dev-staging`
+- AWS S3: `tts-core-dev-dot-data-staging`
+- Azure Blob container: `tts-core-dev-dot-data-staging`
 - Equivalent object store in other clouds or on-prem
 
 ### GSA Buckets (AWS)
 
-**Pattern:** `{agency}-data-{environment}-{purpose}`
+**Pattern:** `tts-core-{environment}-{agency}-data-{purpose}`
 
 | Bucket | Name | Purpose |
 |--------|------|---------|
-| Receiver Landing | `gsa-data-dev-landing` | Inbound landing zone from remote SFTP server |
-| Receiver Target | `gsa-data-dev-target` | Final destination for validated and extracted data |
+| Receiver Landing | `tts-core-dev-gsa-data-landing` | Inbound landing zone from remote SFTP server |
+| Receiver Target | `tts-core-dev-gsa-data-target` | Final destination for validated and extracted data |
 
 **Naming Rules:**
 - `{agency}` uses a short code such as dot, gsa, or usda
@@ -170,13 +170,13 @@ sender-data-staging/
 │       ├── data.tar.gz.asc  (future signing)
 │       └── manifest.json
 
-gsa-data-dev-landing/
+tts-core-dev-gsa-data-landing/
 ├── transfers/
 │   └── {transfer_session_id}/
 │       ├── data.tar.gz
 │       └── manifest.json
 
-gsa-data-dev-target/
+tts-core-dev-gsa-data-target/
 ├── extracted/
 │   └── {transfer_session_id}/
 │       └── {extracted_files}

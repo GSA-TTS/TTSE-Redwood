@@ -102,7 +102,7 @@ class TestStorageError:
     
     def test_storage_error_for_bucket_not_found(self):
         """Test creating StorageError for missing bucket."""
-        error = StorageError("S3 bucket 'gsa-data-dev-landing' not found")
+        error = StorageError("S3 bucket 'tts-core-dev-gsa-data-landing' not found")
         assert "bucket" in str(error).lower()
     
     def test_storage_error_can_be_raised(self):

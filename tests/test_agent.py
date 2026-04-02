@@ -84,9 +84,9 @@ class TestSenderWorkflow:
             "transfer_session_id": "session-123",
             "sender_agency": "dot",
             "receiver_agency": "gsa",
-            "sender_staging_bucket": "dot-data-development-staging",
-            "receiver_landing_bucket": "gsa-data-development-landing",
-            "receiver_target_bucket": "gsa-data-development-target",
+            "sender_staging_bucket": "tts-core-development-dot-data-staging",
+            "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
+            "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_file": None,
         }
         defaults.update(kwargs)
@@ -182,9 +182,9 @@ class TestReceiverWorkflow:
             "transfer_session_id": "session-456",
             "sender_agency": "dot",
             "receiver_agency": "gsa",
-            "sender_staging_bucket": "dot-data-development-staging",
-            "receiver_landing_bucket": "gsa-data-development-landing",
-            "receiver_target_bucket": "gsa-data-development-target",
+            "sender_staging_bucket": "tts-core-development-dot-data-staging",
+            "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
+            "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_file": None,
         }
         defaults.update(kwargs)
@@ -245,9 +245,9 @@ class TestRunAgent:
             "transfer_session_id": "session-123",
             "sender_agency": "dot",
             "receiver_agency": "gsa",
-            "sender_staging_bucket": "dot-data-development-staging",
-            "receiver_landing_bucket": "gsa-data-development-landing",
-            "receiver_target_bucket": "gsa-data-development-target",
+            "sender_staging_bucket": "tts-core-development-dot-data-staging",
+            "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
+            "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_file": None,
         }
         defaults.update(kwargs)

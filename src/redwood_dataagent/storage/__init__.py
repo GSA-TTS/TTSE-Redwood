@@ -26,14 +26,14 @@ Example usage:
         environment="dev",
         purpose=StoragePurpose.STAGING,
     )
-    # Result: "dot-data-dev-staging"
+    # Result: "tts-core-dev-dot-data-staging"
     
     receiver_bucket = build_receiver_bucket(
         agency="gsa",
         environment="dev",
         purpose="landing",
     )
-    # Result: "gsa-data-dev-landing"
+    # Result: "tts-core-dev-gsa-data-landing"
     
     # Build transfer paths with manifest
     transfer_path = SenderStoragePath.transfers(
