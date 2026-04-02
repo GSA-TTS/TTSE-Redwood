@@ -29,6 +29,7 @@ from .audit.logger import (
     log_store_data,
     log_validate_manifest,
 )
+from .aws.s3 import S3Client
 from .config import AgentConfig
 from .exceptions import (
     ConfigurationError,
@@ -59,6 +60,91 @@ def _extract_data(config: AgentConfig) -> None:
     _ = config
 
 
+def _parse_s3_path(path: str) -> tuple[str, str] | None:
+    """Parse an S3 URL into bucket and key components.
+
+    S3 paths have the format: s3://bucket-name/path/to/key
+
+    Parameters
+    ----------
+    path : str
+        S3 path or local file path
+
+    Returns
+    -------
+    tuple[str, str] | None
+        (bucket, key) if path is an S3 URL, None otherwise
+
+    Example
+    -------
+    >>> _parse_s3_path("s3://my-bucket/transfers/sess-001/data.json")
+    ("my-bucket", "transfers/sess-001/data.json")
+    """
+    if not path.startswith("s3://"):
+        return None
+
+    try:
+        # Remove s3:// prefix
+        path_without_scheme = path[5:]
+        # Split on first slash
+        parts = path_without_scheme.split("/", 1)
+        if len(parts) == 2:
+            bucket, key = parts
+            if bucket and key:
+                return bucket, key
+    except (ValueError, IndexError):
+        pass
+
+    raise StorageError(f"Invalid S3 path format: {path}. Expected: s3://bucket/key")
+
+
+def _download_from_s3(
+    s3_path: str, destination_path: Path, aws_region: str
+) -> dict[str, Any]:
+    """Download a file from S3 to container filesystem (S3 → container).
+
+    Helper to fetch sender's data file from sender-side S3 storage into
+    the container's working directory for processing (policy check, compression, etc).
+
+    Parameters
+    ----------
+    s3_path : str
+        Full S3 URL (e.g., "s3://tts-core-dev-dot-data-staging/transfers/sess-001/data.json")
+    destination_path : Path
+        Path on the container filesystem where the S3 object will be written.
+        Typically in a temporary working directory for staging.
+    aws_region : str
+        AWS region where the S3 bucket is located
+
+    Returns
+    -------
+    dict[str, Any]
+        Metadata about the downloaded file:
+        - data_source: "s3_object"
+        - s3_bucket: Source bucket name
+        - s3_key: Source object key
+        - file_name: Name of the downloaded file
+        - file_size_bytes: Size in bytes
+
+    Raises
+    ------
+    StorageError
+        If S3 download fails (bucket not found, object not found, access denied, etc)
+    """
+    bucket, key = _parse_s3_path(s3_path)
+    
+    client = S3Client(aws_region=aws_region)
+    client.download_file(bucket, key, destination_path)
+    
+    return {
+        "data_source": "s3_object",
+        "s3_bucket": bucket,
+        "s3_key": key,
+        "file_name": destination_path.name,
+        "file_size_bytes": destination_path.stat().st_size,
+    }
+
+
 def _resolve_configured_file(file_path: str | None, label: str) -> Path | None:
     """Resolve a configured file path and fail when it does not exist.
 
@@ -78,12 +164,69 @@ def _resolve_configured_file(file_path: str | None, label: str) -> Path | None:
 
 
 def _prepare_sender_data_file(config: AgentConfig, working_dir: Path) -> tuple[Path, dict[str, Any]]:
-    """Stage a sender-provided file.
+    """Load sender's data file from container filesystem or S3 into working directory.
 
-    Day 1 requires a sender-provided file; extraction hook is reserved for
-    future phases and is intentionally not implemented yet.
+    Implements flexible sourcing for Day 1 MVP:
+    - For local testing: reads file from container filesystem (e.g., /tmp/data.json)
+    - For cloud deployment: downloads file from sender-side S3 storage
+
+    The loaded file is staged in the container's working directory for subsequent processing:
+    policy validation → manifest generation → compression → upload to sender SFTP.
+
+    Routing logic:
+    - If path starts with "s3://": download from S3
+    - Otherwise: treat as path on container filesystem
+
+    Parameters
+    ----------
+    config : AgentConfig
+        Runtime configuration containing:
+        - sender_data_file: Path to source file (container path or s3://bucket/key)
+        - aws_region: AWS region for S3 operations (if using S3 source)
+    working_dir : Path
+        Temporary working directory on the container filesystem where file will be staged.
+        Typically created by the caller with tempfile.TemporaryDirectory.
+
+    Returns
+    -------
+    tuple[Path, dict[str, Any]]
+        - staged_file_path: Path on container filesystem where the file was copied/downloaded
+        - metadata: Dict describing the file source and size
+
+    Raises
+    ------
+    StorageError
+        If sender_data_file is not configured, source file doesn't exist on the
+        container filesystem, is not a regular file, or S3 download fails
     """
-    configured_file = _resolve_configured_file(config.sender_data_file, "Sender data")
+    if not config.sender_data_file:
+        _extract_data(config)
+        raise StorageError(
+            "Sender data file is required for Day 1. "
+            "Set SENDER_DATA_FILE to a valid file path (local or s3://bucket/key)."
+        )
+
+    file_path = config.sender_data_file.strip()
+
+    # Check if this is an S3 path
+    if file_path.startswith("s3://"):
+        try:
+            # Create a staged file in working directory
+            # Use the last component of the S3 key as the filename
+            bucket, key = _parse_s3_path(file_path)
+            file_name = Path(key).name or "data"
+            staged_file = working_dir / file_name
+
+            # Download from S3
+            metadata = _download_from_s3(file_path, staged_file, config.aws_region)
+            return staged_file, metadata
+        except StorageError:
+            raise
+        except Exception as e:
+            raise StorageError(f"Failed to download from S3: {e}") from e
+
+    # Otherwise, treat as local file path
+    configured_file = _resolve_configured_file(file_path, "Sender data")
     if configured_file is not None:
         staged_file = working_dir / configured_file.name
         shutil.copy2(configured_file, staged_file)
@@ -96,7 +239,7 @@ def _prepare_sender_data_file(config: AgentConfig, working_dir: Path) -> tuple[P
     _extract_data(config)
     raise StorageError(
         "Sender data file is required for Day 1. "
-        "Set SENDER_DATA_FILE to a valid file path."
+        "Set SENDER_DATA_FILE to a valid file path (local or s3://bucket/key)."
     )
 
 
