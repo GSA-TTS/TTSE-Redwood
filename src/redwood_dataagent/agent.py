@@ -213,7 +213,7 @@ def _prepare_sender_data_file(config: AgentConfig, working_dir: Path) -> tuple[P
         try:
             # Create a staged file in working directory
             # Use the last component of the S3 key as the filename
-            bucket, key = _parse_s3_path(file_path)
+            _, key = _parse_s3_path(file_path)
             file_name = Path(key).name or "data"
             staged_file = working_dir / file_name
 

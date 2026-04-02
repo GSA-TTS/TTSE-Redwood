@@ -87,7 +87,7 @@ class S3Client:
             destination_path.parent.mkdir(parents=True, exist_ok=True)
             self._client.download_file(bucket, key, str(destination_path))
             LOGGER.debug(
-                f"Downloaded S3 object",
+                "Downloaded S3 object",
                 extra={
                     "event": "s3_download",
                     "bucket": bucket,
@@ -149,7 +149,7 @@ class S3Client:
 
             self._client.upload_file(str(source_path), bucket, key)
             LOGGER.debug(
-                f"Uploaded file to S3",
+                "Uploaded file to S3",
                 extra={
                     "event": "s3_upload",
                     "bucket": bucket,
