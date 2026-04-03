@@ -11,6 +11,9 @@ from redwood_dataagent.agent import (
     _compute_checksum,
     _create_receiver_workflow,
     _create_sender_workflow,
+    _download_from_s3,
+    _parse_s3_path,
+    _prepare_sender_data_file,
     run_agent,
 )
 from redwood_dataagent.config import AgentConfig
@@ -307,3 +310,317 @@ class TestRunAgent:
             mock_receiver.return_value = 42
             exit_code = run_agent(config)
             assert exit_code == 42
+
+
+class TestParseS3Path:
+    """Tests for _parse_s3_path() S3 URL parsing."""
+
+    def test_parse_s3_path_valid_simple(self) -> None:
+        """Parse valid S3 path with bucket and key."""
+        bucket, key = _parse_s3_path("s3://my-bucket/path/to/file.json")
+        assert bucket == "my-bucket"
+        assert key == "path/to/file.json"
+
+    def test_parse_s3_path_valid_complex_key(self) -> None:
+        """Parse valid S3 path with complex key including multiple slashes."""
+        bucket, key = _parse_s3_path(
+            "s3://tts-core-dev-dot-data-staging/transfers/sess-001/data.json"
+        )
+        assert bucket == "tts-core-dev-dot-data-staging"
+        assert key == "transfers/sess-001/data.json"
+
+    def test_parse_s3_path_valid_nested_dirs(self) -> None:
+        """Parse S3 path with deeply nested directories."""
+        bucket, key = _parse_s3_path("s3://bucket/a/b/c/d/e/file.tar.gz")
+        assert bucket == "bucket"
+        assert key == "a/b/c/d/e/file.tar.gz"
+
+    def test_parse_s3_path_invalid_not_s3_prefix(self) -> None:
+        """Parse returns None when path does not start with s3://."""
+        result = _parse_s3_path("/local/file/path.json")
+        assert result is None
+
+    def test_parse_s3_path_invalid_no_key(self) -> None:
+        """Parse raises error when S3 path has no key component."""
+        with pytest.raises(StorageError, match="Invalid S3 path format"):
+            _parse_s3_path("s3://bucket-only/")
+
+    def test_parse_s3_path_invalid_no_bucket(self) -> None:
+        """Parse raises error when S3 path has no bucket."""
+        with pytest.raises(StorageError, match="Invalid S3 path format"):
+            _parse_s3_path("s3:///path/to/file.json")
+
+    def test_parse_s3_path_invalid_malformed(self) -> None:
+        """Parse raises error for malformed S3 URLs."""
+        with pytest.raises(StorageError, match="Invalid S3 path format"):
+            _parse_s3_path("s3://")
+
+    def test_parse_s3_path_case_sensitive_prefix(self) -> None:
+        """Parse requires lowercase s3:// prefix."""
+        result = _parse_s3_path("S3://bucket/key")
+        assert result is None
+
+    def test_parse_s3_path_with_special_chars(self) -> None:
+        """Parse handles S3 keys with special characters."""
+        bucket, key = _parse_s3_path("s3://bucket/path-with_special.chars/file.json")
+        assert bucket == "bucket"
+        assert key == "path-with_special.chars/file.json"
+
+
+class TestDownloadFromS3:
+    """Tests for _download_from_s3() helper function."""
+
+    def _make_config(self, **kwargs: object) -> AgentConfig:
+        """Create a test AgentConfig with defaults."""
+        defaults = {
+            "agent_mode": "sender",
+            "tenant": "tts",
+            "environment": "dev",
+            "aws_region": "us-east-1",
+            "log_level": "INFO",
+            "transfer_session_id": "sess-001",
+            "sender_agency": "dot",
+            "receiver_agency": "gsa",
+            "sender_staging_bucket": "tts-core-dev-dot-data-staging",
+            "receiver_landing_bucket": "tts-core-dev-gsa-data-landing",
+            "receiver_target_bucket": "tts-core-dev-gsa-data-target",
+        }
+        defaults.update(kwargs)
+        return AgentConfig(**defaults)  # type: ignore
+
+    def test_download_from_s3_success(self, tmp_path: Path) -> None:
+        """Download from S3 succeeds with metadata."""
+        destination = tmp_path / "downloaded.json"
+
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+            destination.write_text('{"test": "data"}')
+
+            metadata = _download_from_s3(
+                "s3://bucket/path/file.json", destination, "us-east-1"
+            )
+
+            assert metadata["data_source"] == "s3_object"
+            assert metadata["s3_bucket"] == "bucket"
+            assert metadata["s3_key"] == "path/file.json"
+            assert metadata["file_name"] == "downloaded.json"
+            assert metadata["file_size_bytes"] > 0
+            mock_client.download_file.assert_called_once()
+
+    def test_download_from_s3_creates_dirs(self, tmp_path: Path) -> None:
+        """Download from S3 creates parent directories."""
+        destination = tmp_path / "subdir" / "nested" / "file.json"
+
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text('{}')
+
+            _download_from_s3(
+                "s3://bucket/path/file.json", destination, "us-east-1"
+            )
+
+            # Verify download was called (check invocation count and basic args)
+            assert mock_client.download_file.call_count == 1
+
+    def test_download_from_s3_invalid_path_raises(self, tmp_path: Path) -> None:
+        """Download from S3 raises error for invalid S3 path."""
+        destination = tmp_path / "file.json"
+
+        # Invalid path (not S3 format) causes _parse_s3_path to return None
+        # which raises TypeError when unpacking
+        with pytest.raises(TypeError):
+            _download_from_s3("/local/path/file.json", destination, "us-east-1")
+
+    def test_download_from_s3_client_error_raises(self, tmp_path: Path) -> None:
+        """Download from S3 propagates S3Client errors."""
+        destination = tmp_path / "file.json"
+
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_client.download_file.side_effect = StorageError("Bucket not found")
+            mock_s3_class.return_value = mock_client
+
+            with pytest.raises(StorageError, match="Bucket not found"):
+                _download_from_s3(
+                    "s3://bucket/path/file.json", destination, "us-east-1"
+                )
+
+    def test_download_from_s3_uses_aws_region(self, tmp_path: Path) -> None:
+        """Download from S3 passes AWS region to S3Client."""
+        destination = tmp_path / "file.json"
+
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+            destination.write_text('{}')
+
+            _download_from_s3(
+                "s3://bucket/path/file.json", destination, "us-west-2"
+            )
+
+            mock_s3_class.assert_called_once_with(aws_region="us-west-2")
+
+
+class TestPrepareSenderDataFile:
+    """Tests for _prepare_sender_data_file() with local and S3 support."""
+
+    def _make_config(self, sender_data_file: str | None = None) -> AgentConfig:
+        """Create a test AgentConfig with defaults."""
+        return AgentConfig(
+            agent_mode="sender",
+            tenant="tts",
+            environment="dev",
+            aws_region="us-east-1",
+            log_level="INFO",
+            transfer_session_id="sess-001",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            sender_staging_bucket="tts-core-dev-dot-data-staging",
+            receiver_landing_bucket="tts-core-dev-gsa-data-landing",
+            receiver_target_bucket="tts-core-dev-gsa-data-target",
+            sender_data_file=sender_data_file,
+        )
+
+    def test_prepare_sender_data_file_local_success(self, tmp_path: Path) -> None:
+        """Prepare loads file from local filesystem."""
+        source_file = tmp_path / "data.json"
+        source_file.write_text('{"test": "data"}')
+        config = self._make_config(sender_data_file=str(source_file))
+
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        staged_file, metadata = _prepare_sender_data_file(config, working_dir)
+
+        assert staged_file.name == "data.json"
+        assert staged_file.parent == working_dir
+        assert staged_file.read_text() == '{"test": "data"}'
+        assert metadata["file_size_bytes"] > 0
+
+    def test_prepare_sender_data_file_local_missing_raises(self, tmp_path: Path) -> None:
+        """Prepare raises error when local file missing."""
+        config = self._make_config(sender_data_file="/nonexistent/file.json")
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        with pytest.raises(StorageError, match="does not exist"):
+            _prepare_sender_data_file(config, working_dir)
+
+    def test_prepare_sender_data_file_local_directory_raises(self, tmp_path: Path) -> None:
+        """Prepare raises error when local path is a directory."""
+        config = self._make_config(sender_data_file=str(tmp_path))
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        with pytest.raises(StorageError, match="not a file"):
+            _prepare_sender_data_file(config, working_dir)
+
+    def test_prepare_sender_data_file_s3_success(self, tmp_path: Path) -> None:
+        """Prepare downloads file from S3."""
+        config = self._make_config(
+            sender_data_file="s3://tts-core-dev-dot-data-staging/transfers/s001/file.json"
+        )
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+
+            def create_file(bucket, key, dest):
+                Path(dest).write_text('{"from": "s3"}')
+
+            mock_client.download_file.side_effect = create_file
+
+            staged_file, metadata = _prepare_sender_data_file(config, working_dir)
+
+            assert staged_file.name == "file.json"
+            assert staged_file.read_text() == '{"from": "s3"}'
+            assert metadata["data_source"] == "s3_object"
+            mock_client.download_file.assert_called_once()
+
+    def test_prepare_sender_data_file_s3_uses_aws_region(self, tmp_path: Path) -> None:
+        """Prepare passes AWS region for S3 downloads."""
+        config = self._make_config(
+            sender_data_file="s3://bucket/path/file.json"
+        )
+        config = AgentConfig(
+            **{
+                **config.__dict__,
+                "aws_region": "eu-west-1",
+            }
+        )
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+
+            def create_file(bucket, key, dest):
+                Path(dest).write_text('{}')
+
+            mock_client.download_file.side_effect = create_file
+
+            _prepare_sender_data_file(config, working_dir)
+
+            mock_s3_class.assert_called_once_with(aws_region="eu-west-1")
+
+    def test_prepare_sender_data_file_s3_error_raises(self, tmp_path: Path) -> None:
+        """Prepare propagates S3 download errors."""
+        config = self._make_config(
+            sender_data_file="s3://bucket/path/missing.json"
+        )
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_client.download_file.side_effect = StorageError("Key not found")
+            mock_s3_class.return_value = mock_client
+
+            with pytest.raises(StorageError, match="Key not found"):
+                _prepare_sender_data_file(config, working_dir)
+
+    def test_prepare_sender_data_file_not_configured_raises(self, tmp_path: Path) -> None:
+        """Prepare raises error when no data file configured."""
+        config = self._make_config(sender_data_file=None)
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        with pytest.raises(StorageError, match="required for Day 1"):
+            _prepare_sender_data_file(config, working_dir)
+
+    def test_prepare_sender_data_file_routes_by_prefix(self, tmp_path: Path) -> None:
+        """Prepare routes local vs S3 based on s3:// prefix."""
+        # Test local routing
+        local_file = tmp_path / "local.json"
+        local_file.write_text('{"source": "local"}')
+        config = self._make_config(sender_data_file=str(local_file))
+
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        staged_file, metadata = _prepare_sender_data_file(config, working_dir)
+        assert staged_file.exists()
+        assert "local" in metadata.get("file_name", "")
+
+    def test_prepare_sender_data_file_metadata_format(self, tmp_path: Path) -> None:
+        """Prepare returns properly formatted metadata dict."""
+        source_file = tmp_path / "data.json"
+        source_file.write_text('{"key": "value"}')
+        config = self._make_config(sender_data_file=str(source_file))
+
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+
+        staged_file, metadata = _prepare_sender_data_file(config, working_dir)
+
+        # Verify metadata has expected keys
+        assert "file_name" in metadata
+        assert "file_size_bytes" in metadata
+        assert metadata["file_size_bytes"] > 0
+        assert isinstance(metadata["file_size_bytes"], int)
