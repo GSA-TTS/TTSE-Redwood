@@ -258,7 +258,7 @@ class ReceiverLandingZone:
             extracted_files = []
             total_bytes = 0
 
-            with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:  # NOSONAR: S1863 - safe extraction with filter="data"
+            with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:  # NOSONAR
                 for member in tar.getmembers():
                     if member.isfile():
                         extracted_path = target_directory / member.name
