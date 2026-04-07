@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import tarfile
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -247,8 +248,11 @@ class ReceiverLandingZone:
         """
         try:
             if target_directory is None:
-                target_directory = Path("/tmp/redwood-receiver-extract")
-            target_directory.mkdir(parents=True, exist_ok=True)
+                # Create secure temp directory with restricted permissions (0o700)
+                temp_dir = tempfile.mkdtemp(prefix="redwood-receiver-extract-")
+                target_directory = Path(temp_dir)
+            else:
+                target_directory.mkdir(parents=True, exist_ok=True)
 
             # Extract tar.gz
             extracted_files = []
