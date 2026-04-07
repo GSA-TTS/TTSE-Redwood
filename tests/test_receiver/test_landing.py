@@ -295,6 +295,29 @@ class TestReceiverLandingZoneDecompress:
         assert metadata["file_count"] == 3
         assert all((extract_dir / f"file{i}.txt").exists() for i in range(3))
 
+    def test_decompress_path_traversal_protection(self, receiver_landing_zone, tmp_path):
+        """Test decompression rejects path traversal attempts."""
+        # Create archive with path traversal attempt
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            info = tarfile.TarInfo(name="../evil.txt")
+            content = b"malicious"
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+        archive_bytes = tar_buffer.getvalue()
+
+        extract_dir = tmp_path / "extract"
+        extract_dir.mkdir()
+
+        with pytest.raises(StorageError, match="path traversal"):
+            receiver_landing_zone.decompress_archive(
+                archive_bytes=archive_bytes,
+                target_directory=extract_dir,
+                transfer_session_id="transfer-20260406-001",
+                sender_agency="dot",
+                receiver_agency="gsa",
+            )
+
 
 class TestReceiverLandingZoneIntegration:
     """Integration tests for complete landing zone workflow."""

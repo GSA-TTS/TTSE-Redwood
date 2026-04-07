@@ -262,6 +262,13 @@ class ReceiverLandingZone:
                 for member in tar.getmembers():
                     if member.isfile():
                         extracted_path = target_directory / member.name
+                        
+                        # Prevent path traversal: ensure extracted file stays within target_directory
+                        try:
+                            extracted_path.resolve().relative_to(target_directory.resolve())
+                        except ValueError:
+                            raise StorageError(f"Archive contains path traversal: {member.name}")
+                        
                         extracted_path.parent.mkdir(parents=True, exist_ok=True)
                         tar.extractall(
                             path=target_directory,
