@@ -8,5 +8,6 @@ This package contains receiver-side functionality for:
 """
 
 from redwood_dataagent.receiver.landing import ReceiverLandingZone
+from redwood_dataagent.receiver.store import ReceiverTargetStore
 
-__all__ = ["ReceiverLandingZone"]
+__all__ = ["ReceiverLandingZone", "ReceiverTargetStore"]
