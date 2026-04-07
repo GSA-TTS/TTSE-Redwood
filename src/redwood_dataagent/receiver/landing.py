@@ -1,0 +1,342 @@
+"""Receiver landing zone ingest for TTSE Redwood Data Agent.
+
+This module handles receiver-side data ingest from S3 landing zone:
+- Fetch transfer artifacts (archive + manifest) from S3 landing
+- Validate manifest integrity and checksum verification
+- Decompress archive to working directory
+- Emit audit events for ingest workflow
+"""
+
+import hashlib
+import io
+import json
+import logging
+import tarfile
+from pathlib import Path
+from typing import Optional
+
+from redwood_dataagent.audit.events import AuditEventType, EventOutcome
+from redwood_dataagent.audit.logger import log_event
+from redwood_dataagent.exceptions import ManifestValidationError, StorageError
+from redwood_dataagent.models.manifest import TransferManifest
+from redwood_dataagent.aws.s3 import S3Client
+
+_logger = logging.getLogger(__name__)
+
+
+class ReceiverLandingZone:
+    """Receiver agent for landing zone ingest and validation.
+
+    This class orchestrates the receiver-side data flow:
+    1. Fetch archive and manifest from S3 landing zone
+    2. Validate manifest and verify checksums
+    3. Decompress archive to working directory
+
+    Attributes:
+        s3_client: S3Client for reading landing zone artifacts
+        landing_bucket: S3 bucket name for landing zone
+        environment: Deployment environment (dev/staging/prod)
+    """
+
+    def __init__(
+        self,
+        s3_client: S3Client,
+        landing_bucket: str,
+        environment: str,
+    ):
+        """Initialize ReceiverLandingZone.
+
+        Args:
+            s3_client: S3Client instance for storage operations
+            landing_bucket: S3 bucket name for landing zone (e.g., gsa-data-dev-landing)
+            environment: Deployment environment (dev/staging/prod)
+        """
+        self.s3_client = s3_client
+        self.landing_bucket = landing_bucket
+        self.environment = environment
+
+    def fetch_from_landing_bucket(
+        self,
+        transfer_session_id: str,
+        sender_agency: str,
+        receiver_agency: str,
+    ) -> tuple[bytes, dict]:
+        """Download archive and manifest from S3 landing zone.
+
+        Args:
+            transfer_session_id: Unique transfer correlation ID
+            sender_agency: Sending agency code
+            receiver_agency: Receiving agency code
+
+        Returns:
+            Tuple of (archive_bytes, manifest_dict)
+
+        Raises:
+            StorageError: If S3 download fails
+        """
+        try:
+            # Log fetch attempt
+            log_event(
+                event_type=AuditEventType.SFTP_TRANSFER_START,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=receiver_agency,
+                stage="receiver",
+                outcome=EventOutcome.SUCCESS,
+                details={
+                    "action": "landing_fetch_start",
+                    "bucket": self.landing_bucket,
+                    "transfer_session_id": transfer_session_id,
+                },
+            )
+
+            # Construct S3 paths
+            landing_prefix = f"transfers/{transfer_session_id}"
+            manifest_key = f"{landing_prefix}/manifest.json"
+            archive_key = f"{landing_prefix}/transfer.tar.gz"
+
+            # Download manifest first to validate before downloading large archive
+            manifest_bytes = self._download_from_s3(manifest_key, "manifest.json")
+            manifest_dict = json.loads(manifest_bytes.decode("utf-8"))
+
+            # Download archive
+            archive_bytes = self._download_from_s3(archive_key, "transfer.tar.gz")
+
+            # Log successful fetch
+            log_event(
+                event_type=AuditEventType.SFTP_TRANSFER_COMPLETE,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=receiver_agency,
+                stage="receiver",
+                outcome=EventOutcome.SUCCESS,
+                bytes_transferred=len(archive_bytes),
+                details={
+                    "action": "landing_fetch_complete",
+                    "archive_size_bytes": len(archive_bytes),
+                    "manifest_size_bytes": len(manifest_bytes),
+                },
+            )
+
+            return archive_bytes, manifest_dict
+
+        except StorageError:
+            raise
+        except Exception as e:
+            error_msg = f"Failed to fetch from landing bucket: {str(e)}"
+            _logger.error(error_msg)
+
+            # Log failed fetch
+            log_event(
+                event_type=AuditEventType.SFTP_TRANSFER_COMPLETE,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=receiver_agency,
+                stage="receiver",
+                outcome=EventOutcome.FAILURE,
+                details={"action": "landing_fetch_failed", "error": str(e)},
+            )
+
+            raise StorageError(error_msg) from e
+
+    def validate_manifest(
+        self,
+        manifest_dict: dict,
+        archive_bytes: bytes,
+        transfer_session_id: str,
+        sender_agency: str,
+        receiver_agency: str,
+    ) -> TransferManifest:
+        """Validate manifest and verify archive checksum.
+
+        Args:
+            manifest_dict: Parsed manifest JSON
+            archive_bytes: Archive file content
+            transfer_session_id: Transfer correlation ID
+            sender_agency: Sending agency code
+            receiver_agency: Receiving agency code
+
+        Returns:
+            Validated TransferManifest instance
+
+        Raises:
+            ManifestValidationError: If manifest is invalid or checksum mismatches
+        """
+        try:
+            # Parse and validate manifest structure
+            manifest = TransferManifest(**manifest_dict)
+
+            # Verify archive checksum against manifest
+            archive_checksum = hashlib.sha256(archive_bytes).hexdigest()
+
+            # Manifest should have one entry for the archive
+            if len(manifest.files) != 1:
+                raise ManifestValidationError(
+                    f"Expected 1 file entry in manifest, got {len(manifest.files)}"
+                )
+
+            expected_checksum = manifest.files[0].checksum_sha256
+            if archive_checksum != expected_checksum:
+                error_msg = (
+                    f"Archive checksum mismatch: "
+                    f"expected {expected_checksum}, got {archive_checksum}"
+                )
+                raise ManifestValidationError(error_msg)
+
+            # Log successful validation
+            log_event(
+                event_type=AuditEventType.VALIDATE_MANIFEST,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=receiver_agency,
+                stage="receiver",
+                outcome=EventOutcome.SUCCESS,
+                details={
+                    "action": "manifest_validation_success",
+                    "checksum_algorithm": manifest.checksum_algorithm.value,
+                    "archive_checksum": archive_checksum,
+                },
+            )
+
+            return manifest
+
+        except ManifestValidationError:
+            raise
+        except Exception as e:
+            error_msg = f"Manifest validation failed: {str(e)}"
+            _logger.error(error_msg)
+
+            # Log failed validation
+            log_event(
+                event_type=AuditEventType.VALIDATE_MANIFEST,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=receiver_agency,
+                stage="receiver",
+                outcome=EventOutcome.FAILURE,
+                details={"action": "manifest_validation_failed", "error": str(e)},
+            )
+
+            raise ManifestValidationError(error_msg) from e
+
+    def decompress_archive(
+        self,
+        archive_bytes: bytes,
+        target_directory: Optional[Path] = None,
+        transfer_session_id: Optional[str] = None,
+        sender_agency: Optional[str] = None,
+        receiver_agency: Optional[str] = None,
+    ) -> dict:
+        """Decompress tar.gz archive to working directory.
+
+        Args:
+            archive_bytes: Archive file content in bytes
+            target_directory: Directory to extract to. If None, use temp directory.
+            transfer_session_id: Transfer correlation ID (for audit logging)
+            sender_agency: Sending agency code (for audit logging)
+            receiver_agency: Receiving agency code (for audit logging)
+
+        Returns:
+            Dictionary with extraction metadata:
+            - file_count: Number of files extracted
+            - total_bytes: Total bytes extracted
+            - extracted_files: List of extracted file paths
+
+        Raises:
+            StorageError: If decompression fails or archive is invalid
+        """
+        try:
+            if target_directory is None:
+                target_directory = Path("/tmp/redwood-receiver-extract")
+            target_directory.mkdir(parents=True, exist_ok=True)
+
+            # Extract tar.gz
+            extracted_files = []
+            total_bytes = 0
+
+            with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:
+                for member in tar.getmembers():
+                    if member.isfile():
+                        extracted_path = target_directory / member.name
+                        extracted_path.parent.mkdir(parents=True, exist_ok=True)
+                        tar.extractall(
+                            path=target_directory,
+                            members=[member],
+                            filter="data"  # Security: only extract regular files, skip symbolic links
+                        )
+                        extracted_files.append(member.name)
+                        total_bytes += member.size
+
+            extraction_metadata = {
+                "file_count": len(extracted_files),
+                "total_bytes": total_bytes,
+                "extracted_files": extracted_files,
+                "target_directory": str(target_directory),
+            }
+
+            # Log successful decompression
+            if transfer_session_id and sender_agency and receiver_agency:
+                log_event(
+                    event_type=AuditEventType.DECOMPRESS,
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=receiver_agency,
+                    stage="receiver",
+                    outcome=EventOutcome.SUCCESS,
+                    details={
+                        "action": "decompress_success",
+                        "file_count": len(extracted_files),
+                        "total_bytes": total_bytes,
+                    },
+                )
+
+            return extraction_metadata
+
+        except Exception as e:
+            error_msg = f"Failed to decompress archive: {str(e)}"
+            _logger.error(error_msg)
+
+            # Log failed decompression
+            if transfer_session_id and sender_agency and receiver_agency:
+                log_event(
+                    event_type=AuditEventType.DECOMPRESS,
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=receiver_agency,
+                    stage="receiver",
+                    outcome=EventOutcome.FAILURE,
+                    details={"action": "decompress_failed", "error": str(e)},
+                )
+
+            raise StorageError(error_msg) from e
+
+    def _download_from_s3(self, s3_key: str, file_type: str) -> bytes:
+        """Helper to download file from S3 landing bucket.
+
+        Args:
+            s3_key: S3 object key path
+            file_type: Description of file (for logging)
+
+        Returns:
+            File content as bytes
+
+        Raises:
+            StorageError: If download fails
+        """
+        try:
+            # Use S3Client to download file
+            file_content = io.BytesIO()
+            
+            # Download from S3
+            response = self.s3_client.s3_client.get_object(
+                Bucket=self.landing_bucket,
+                Key=s3_key
+            )
+            file_content.write(response['Body'].read())
+            
+            return file_content.getvalue()
+
+        except Exception as e:
+            error_msg = f"Failed to download {file_type} from s3://{self.landing_bucket}/{s3_key}: {str(e)}"
+            _logger.error(error_msg)
+            raise StorageError(error_msg) from e
