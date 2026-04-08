@@ -246,7 +246,7 @@ class TestReceiverWorkflow:
             "sender_staging_bucket": "tts-core-development-dot-data-staging",
             "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
-            "sender_data_file": None,
+            "sender_data_directory": None,
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -309,7 +309,7 @@ class TestRunAgent:
             "sender_staging_bucket": "tts-core-development-dot-data-staging",
             "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
-            "sender_data_file": None,
+            "sender_data_directory": None,
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -318,8 +318,22 @@ class TestRunAgent:
         """Verify sender mode agent completes with exit code 0."""
         source_file = tmp_path / "records.json"
         source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        config = self._make_config(mode="sender", sender_data_file=str(source_file))
-        assert run_agent(config) == 0
+        config = self._make_config(mode="sender", sender_data_directory="s3://bucket/incoming/")
+        
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._download_from_s3") as mock_download:
+                with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                    mock_client = MagicMock()
+                    mock_s3_class.return_value = mock_client
+                    
+                    def mock_s3_download(bucket, key, dest):
+                        import shutil
+                        shutil.copy2(source_file, dest)
+                    
+                    mock_client.download_file.side_effect = mock_s3_download
+                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    
+                    assert run_agent(config) == 0
 
     def test_run_agent_receiver_returns_success(self) -> None:
         """Verify receiver mode agent completes with exit code 0."""
