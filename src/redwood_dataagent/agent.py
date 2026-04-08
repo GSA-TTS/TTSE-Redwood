@@ -86,7 +86,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
         client = S3Client(aws_region=aws_region)
         
         # List objects in the incoming directory
-        response = client.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+        response = client._client.list_objects_v2(Bucket=bucket, Prefix=prefix)
         files = []
         
         if "Contents" not in response:
@@ -103,7 +103,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
             # Check if file has been processed (marker exists in processed/)
             processed_marker_key = f"{prefix}../processed/{file_name}.done"
             try:
-                client.s3_client.head_object(Bucket=bucket, Key=processed_marker_key)
+                client._client.head_object(Bucket=bucket, Key=processed_marker_key)
                 LOGGER.debug(f"Skipping already processed file: {key}")
                 continue
             except Exception:
@@ -147,7 +147,7 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
             "original_file": file_name,
         }
         
-        client.s3_client.put_object(
+        client._client.put_object(
             Bucket=bucket,
             Key=marker_key,
             Body=json.dumps(marker_metadata).encode("utf-8"),

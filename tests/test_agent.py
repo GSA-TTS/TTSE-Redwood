@@ -313,10 +313,10 @@ class TestScanSenderDirectory:
         with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
             mock_client = MagicMock()
             mock_s3_class.return_value = mock_client
-            mock_client.s3_client.list_objects_v2.return_value = {
+            mock_client._client.list_objects_v2.return_value = {
                 "Contents": [{"Key": "incoming/file1.json"}]
             }
-            mock_client.s3_client.head_object.side_effect = Exception("No marker")
+            mock_client._client.head_object.side_effect = Exception("No marker")
 
             result = _scan_sender_directory("s3://bucket/incoming/", "us-east-1")
             
@@ -337,8 +337,8 @@ class TestMarkFileProcessed:
             
             _mark_file_processed("test.json", "s3://bucket/incoming/", "us-east-1")
             
-            mock_client.s3_client.put_object.assert_called_once()
-            call_kwargs = mock_client.s3_client.put_object.call_args[1]
+            mock_client._client.put_object.assert_called_once()
+            call_kwargs = mock_client._client.put_object.call_args[1]
             assert "processed" in call_kwargs["Key"]
             assert "test.json" in call_kwargs["Key"]
 
