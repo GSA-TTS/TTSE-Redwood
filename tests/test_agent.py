@@ -13,7 +13,6 @@ from redwood_dataagent.agent import (
     _create_sender_workflow,
     _download_from_s3,
     _parse_s3_path,
-    _prepare_sender_data_file,
     run_agent,
 )
 from redwood_dataagent.config import AgentConfig
@@ -90,85 +89,144 @@ class TestSenderWorkflow:
             "sender_staging_bucket": "tts-core-development-dot-data-staging",
             "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
-            "sender_data_file": None,
+            "sender_data_directory": None,
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
 
     def test_sender_workflow_success(self, tmp_path: Path) -> None:
         """Sender workflow completes successfully."""
-        source_file = tmp_path / "records.json"
-        source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        config = self._make_config(sender_data_file=str(source_file))
-        exit_code = _create_sender_workflow(config)
-        assert exit_code == 0
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        
+        # Create a temp file for mocking the download
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
+        
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                    mock_client = MagicMock()
+                    mock_s3_class.return_value = mock_client
+                    
+                    # Mock the download_file method to copy our test file
+                    def mock_download(bucket, key, dest):
+                        import shutil
+                        shutil.copy2(test_file, dest)
+                    
+                    mock_client.download_file.side_effect = mock_download
+                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    
+                    exit_code = _create_sender_workflow(config)
+                    assert exit_code == 0
 
     def test_sender_workflow_requires_sender_file(self) -> None:
-        """Sender workflow fails when no sender data file is configured for Day 1."""
+        """Sender workflow succeeds gracefully when no sender data directory is configured (idempotent)."""
         config = self._make_config()
 
         exit_code = _create_sender_workflow(config)
 
-        assert exit_code == 1
+        assert exit_code == 0  # Idempotent: no directory = no work to do = success
 
     def test_sender_workflow_with_mock_policy(self, tmp_path: Path) -> None:
         """Sender workflow works with mocked policy approver."""
-        source_file = tmp_path / "records.json"
-        source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        config = self._make_config(sender_data_file=str(source_file))
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        
+        # Create a temp file for mocking the download
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
 
-        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_class:
-            mock_approver = MagicMock()
-            mock_approver.approve_transfer.return_value = True
-            mock_approver_class.return_value = mock_approver
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                    with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_class:
+                        mock_client = MagicMock()
+                        mock_s3_class.return_value = mock_client
+                        
+                        def mock_download(bucket, key, dest):
+                            import shutil
+                            shutil.copy2(test_file, dest)
+                        
+                        mock_client.download_file.side_effect = mock_download
+                        mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                        
+                        mock_approver = MagicMock()
+                        mock_approver.approve_transfer.return_value = True
+                        mock_approver_class.return_value = mock_approver
 
-            exit_code = _create_sender_workflow(config)
-            assert exit_code == 0
-            mock_approver.approve_transfer.assert_called_once()
+                        exit_code = _create_sender_workflow(config)
+                        assert exit_code == 0
+                        mock_approver.approve_transfer.assert_called_once()
 
     def test_sender_workflow_uses_sender_provided_data_file(self, tmp_path: Path) -> None:
         """Sender workflow stages a sender-provided source file when configured."""
-        source_file = tmp_path / "records.json"
-        source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        config = self._make_config(sender_data_file=str(source_file))
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        
+        # Create a temp file for mocking the download
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
 
-        exit_code = _create_sender_workflow(config)
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                    mock_client = MagicMock()
+                    mock_s3_class.return_value = mock_client
+                    
+                    def mock_download(bucket, key, dest):
+                        import shutil
+                        shutil.copy2(test_file, dest)
+                    
+                    mock_client.download_file.side_effect = mock_download
+                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    
+                    exit_code = _create_sender_workflow(config)
+                    assert exit_code == 0
 
-        assert exit_code == 0
-
-    def test_sender_workflow_policy_denied(self, tmp_path: Path) -> None:
+    def test_sender_workflow_policy_denied(self) -> None:
         """Sender workflow exits with error when policy denies transfer."""
-        source_file = tmp_path / "records.json"
-        source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        config = self._make_config(sender_data_file=str(source_file))
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
 
-        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_class:
-            mock_approver = MagicMock()
-            mock_approver.approve_transfer.return_value = False
-            mock_approver_class.return_value = mock_approver
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_class:
+                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    mock_approver = MagicMock()
+                    mock_approver.approve_transfer.return_value = False
+                    mock_approver_class.return_value = mock_approver
 
-            exit_code = _create_sender_workflow(config)
-            assert exit_code == 1
+                    exit_code = _create_sender_workflow(config)
+                    assert exit_code == 1
 
     def test_sender_workflow_handles_exception(self) -> None:
-        """Sender workflow handles exceptions gracefully."""
-        config = self._make_config()
+        """Sender workflow handles exceptions gracefully and returns error code."""
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
 
-        with patch("redwood_dataagent.agent._extract_data") as mock_extract:
-            mock_extract.side_effect = RuntimeError("Test error")
-            exit_code = _create_sender_workflow(config)
-            assert exit_code == 1
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._download_from_s3") as mock_download:
+                mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                mock_download.side_effect = RuntimeError("Download failed")
+                exit_code = _create_sender_workflow(config)
+                assert exit_code == 1
 
-    def test_sender_workflow_logs_events(self, tmp_path: Path) -> None:
+    def test_sender_workflow_logs_events(self) -> None:
         """Sender workflow logs audit events."""
-        source_file = tmp_path / "records.json"
-        source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        config = self._make_config(sender_data_file=str(source_file))
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
 
-        with patch("redwood_dataagent.agent.log_pipeline_start") as mock_start:
-            with patch("redwood_dataagent.agent.log_pipeline_complete"):
-                _create_sender_workflow(config)
-                mock_start.assert_called_once()
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.log_pipeline_start") as mock_start:
+                    with patch("redwood_dataagent.agent.log_pipeline_complete"):
+                        mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                        _create_sender_workflow(config)
+                        mock_start.assert_called_once()
+
+    def test_sender_workflow_no_files_found(self) -> None:
+        """Sender workflow returns success when no new files are found."""
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            mock_scan.return_value = []  # No new files to process
+            exit_code = _create_sender_workflow(config)
+            assert exit_code == 0  # Still succeeds (idempotent)
 
 
 class TestReceiverWorkflow:
@@ -462,165 +520,3 @@ class TestDownloadFromS3:
             )
 
             mock_s3_class.assert_called_once_with(aws_region="us-west-2")
-
-
-class TestPrepareSenderDataFile:
-    """Tests for _prepare_sender_data_file() with local and S3 support."""
-
-    def _make_config(self, sender_data_file: str | None = None) -> AgentConfig:
-        """Create a test AgentConfig with defaults."""
-        return AgentConfig(
-            agent_mode="sender",
-            tenant="tts",
-            environment="dev",
-            aws_region="us-east-1",
-            log_level="INFO",
-            transfer_session_id="sess-001",
-            sender_agency="dot",
-            receiver_agency="gsa",
-            sender_staging_bucket="tts-core-dev-dot-data-staging",
-            receiver_landing_bucket="tts-core-dev-gsa-data-landing",
-            receiver_target_bucket="tts-core-dev-gsa-data-target",
-            sender_data_file=sender_data_file,
-        )
-
-    def test_prepare_sender_data_file_local_success(self, tmp_path: Path) -> None:
-        """Prepare loads file from local filesystem."""
-        source_file = tmp_path / "data.json"
-        source_file.write_text('{"test": "data"}')
-        config = self._make_config(sender_data_file=str(source_file))
-
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        staged_file, metadata = _prepare_sender_data_file(config, working_dir)
-
-        assert staged_file.name == "data.json"
-        assert staged_file.parent == working_dir
-        assert staged_file.read_text() == '{"test": "data"}'
-        assert metadata["file_size_bytes"] > 0
-
-    def test_prepare_sender_data_file_local_missing_raises(self, tmp_path: Path) -> None:
-        """Prepare raises error when local file missing."""
-        config = self._make_config(sender_data_file="/nonexistent/file.json")
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        with pytest.raises(StorageError, match="does not exist"):
-            _prepare_sender_data_file(config, working_dir)
-
-    def test_prepare_sender_data_file_local_directory_raises(self, tmp_path: Path) -> None:
-        """Prepare raises error when local path is a directory."""
-        config = self._make_config(sender_data_file=str(tmp_path))
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        with pytest.raises(StorageError, match="not a file"):
-            _prepare_sender_data_file(config, working_dir)
-
-    def test_prepare_sender_data_file_s3_success(self, tmp_path: Path) -> None:
-        """Prepare downloads file from S3."""
-        config = self._make_config(
-            sender_data_file="s3://tts-core-dev-dot-data-staging/transfers/s001/file.json"
-        )
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-            mock_client = MagicMock()
-            mock_s3_class.return_value = mock_client
-
-            def create_file(bucket, key, dest):
-                Path(dest).write_text('{"from": "s3"}')
-
-            mock_client.download_file.side_effect = create_file
-
-            staged_file, metadata = _prepare_sender_data_file(config, working_dir)
-
-            assert staged_file.name == "file.json"
-            assert staged_file.read_text() == '{"from": "s3"}'
-            assert metadata["data_source"] == "s3_object"
-            mock_client.download_file.assert_called_once()
-
-    def test_prepare_sender_data_file_s3_uses_aws_region(self, tmp_path: Path) -> None:
-        """Prepare passes AWS region for S3 downloads."""
-        config = self._make_config(
-            sender_data_file="s3://bucket/path/file.json"
-        )
-        config = AgentConfig(
-            **{
-                **config.__dict__,
-                "aws_region": "eu-west-1",
-            }
-        )
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-            mock_client = MagicMock()
-            mock_s3_class.return_value = mock_client
-
-            def create_file(bucket, key, dest):
-                Path(dest).write_text('{}')
-
-            mock_client.download_file.side_effect = create_file
-
-            _prepare_sender_data_file(config, working_dir)
-
-            mock_s3_class.assert_called_once_with(aws_region="eu-west-1")
-
-    def test_prepare_sender_data_file_s3_error_raises(self, tmp_path: Path) -> None:
-        """Prepare propagates S3 download errors."""
-        config = self._make_config(
-            sender_data_file="s3://bucket/path/missing.json"
-        )
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-            mock_client = MagicMock()
-            mock_client.download_file.side_effect = StorageError("Key not found")
-            mock_s3_class.return_value = mock_client
-
-            with pytest.raises(StorageError, match="Key not found"):
-                _prepare_sender_data_file(config, working_dir)
-
-    def test_prepare_sender_data_file_not_configured_raises(self, tmp_path: Path) -> None:
-        """Prepare raises error when no data file configured."""
-        config = self._make_config(sender_data_file=None)
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        with pytest.raises(StorageError, match="required for Day 1"):
-            _prepare_sender_data_file(config, working_dir)
-
-    def test_prepare_sender_data_file_routes_by_prefix(self, tmp_path: Path) -> None:
-        """Prepare routes local vs S3 based on s3:// prefix."""
-        # Test local routing
-        local_file = tmp_path / "local.json"
-        local_file.write_text('{"source": "local"}')
-        config = self._make_config(sender_data_file=str(local_file))
-
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        staged_file, metadata = _prepare_sender_data_file(config, working_dir)
-        assert staged_file.exists()
-        assert "local" in metadata.get("file_name", "")
-
-    def test_prepare_sender_data_file_metadata_format(self, tmp_path: Path) -> None:
-        """Prepare returns properly formatted metadata dict."""
-        source_file = tmp_path / "data.json"
-        source_file.write_text('{"key": "value"}')
-        config = self._make_config(sender_data_file=str(source_file))
-
-        working_dir = tmp_path / "working"
-        working_dir.mkdir()
-
-        staged_file, metadata = _prepare_sender_data_file(config, working_dir)
-
-        # Verify metadata has expected keys
-        assert "file_name" in metadata
-        assert "file_size_bytes" in metadata
-        assert metadata["file_size_bytes"] > 0
-        assert isinstance(metadata["file_size_bytes"], int)
