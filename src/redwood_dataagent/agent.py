@@ -100,8 +100,14 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
             
             file_name = Path(key).name
             
+            # Skip if this is a marker file (.done files should not be processed)
+            if file_name.endswith(".done"):
+                LOGGER.debug(f"Skipping marker file: {key}")
+                continue
+            
             # Check if file has been processed (marker exists in processed/)
-            processed_marker_key = f"{prefix}../processed/{file_name}.done"
+            # Construct absolute path: replace 'incoming/' with 'processed/'
+            processed_marker_key = key.replace("incoming/", "processed/") + ".done"
             try:
                 client._client.head_object(Bucket=bucket, Key=processed_marker_key)
                 LOGGER.debug(f"Skipping already processed file: {key}")
@@ -139,8 +145,10 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
         bucket, prefix = _parse_s3_path(directory_path)
         client = S3Client(aws_region=aws_region)
         
-        # Create marker in processed/ directory
-        marker_key = f"{prefix}../processed/{file_name}.done"
+        # Create marker in processed/ directory using absolute path
+        # Replace 'incoming/' with 'processed/' in the prefix
+        processed_prefix = prefix.replace("incoming/", "processed/")
+        marker_key = f"{processed_prefix}{file_name}.done"
         timestamp = Path(marker_key).name or "data"
         marker_metadata = {
             "processed_at": timestamp,
