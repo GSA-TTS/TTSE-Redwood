@@ -60,6 +60,103 @@ def _extract_data(config: AgentConfig) -> None:
     _ = config
 
 
+def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[str, str]]:
+    """Scan S3 directory for unprocessed files (files without .done marker).
+
+    Parameters
+    ----------
+    directory_path : str
+        S3 directory path (e.g., s3://bucket/incoming/)
+    aws_region : str
+        AWS region for S3 access
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        List of (s3_path, file_name) tuples for files ready to process.
+        Excludes files that have .done markers in processed/
+
+    Raises
+    ------
+    StorageError
+        If directory listing fails
+    """
+    try:
+        bucket, prefix = _parse_s3_path(directory_path)
+        client = S3Client(aws_region=aws_region)
+        
+        # List objects in the incoming directory
+        response = client.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+        files = []
+        
+        if "Contents" not in response:
+            return []
+        
+        for obj in response["Contents"]:
+            key = obj["Key"]
+            # Skip if it's the prefix itself or is a directory marker
+            if key == prefix or key.endswith("/"):
+                continue
+            
+            file_name = Path(key).name
+            
+            # Check if file has been processed (marker exists in processed/)
+            processed_marker_key = f"{prefix}../processed/{file_name}.done"
+            try:
+                client.s3_client.head_object(Bucket=bucket, Key=processed_marker_key)
+                LOGGER.debug(f"Skipping already processed file: {key}")
+                continue
+            except Exception:
+                # Marker doesn't exist, file is ready to process
+                pass
+            
+            s3_path = f"s3://{bucket}/{key}"
+            files.append((s3_path, file_name))
+        
+        return files
+    except Exception as e:
+        raise StorageError(f"Failed to scan sender directory: {e}") from e
+
+
+def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -> None:
+    """Create a .done marker in processed/ directory after successful processing.
+
+    Parameters
+    ----------
+    file_name : str
+        Name of the file that was processed
+    directory_path : str
+        S3 directory path (e.g., s3://bucket/incoming/)
+    aws_region : str
+        AWS region for S3 access
+
+    Raises
+    ------
+    StorageError
+        If marker creation fails
+    """
+    try:
+        bucket, prefix = _parse_s3_path(directory_path)
+        client = S3Client(aws_region=aws_region)
+        
+        # Create marker in processed/ directory
+        marker_key = f"{prefix}../processed/{file_name}.done"
+        timestamp = Path(marker_key).name or "data"
+        marker_metadata = {
+            "processed_at": timestamp,
+            "original_file": file_name,
+        }
+        
+        client.s3_client.put_object(
+            Bucket=bucket,
+            Key=marker_key,
+            Body=json.dumps(marker_metadata).encode("utf-8"),
+        )
+        LOGGER.info(f"Marked file as processed: {marker_key}")
+    except Exception as e:
+        raise StorageError(f"Failed to mark file as processed: {e}") from e
+
+
 def _parse_s3_path(path: str) -> tuple[str, str] | None:
     """Parse an S3 URL into bucket and key components.
 
@@ -303,6 +400,10 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
     Implements: Extract → Policy → Compress → Manifest → Stage
 
+    Scans SENDER_DATA_DIRECTORY for new files to process. Files marked with .done
+    in processed/ directory are skipped. After successful processing, creates a
+    .done marker to prevent reprocessing.
+
     Parameters
     ----------
     config : AgentConfig
@@ -314,6 +415,40 @@ def _create_sender_workflow(config: AgentConfig) -> int:
         Exit code (0 for success, non-zero for failure).
     """
     try:
+        if not config.sender_data_directory:
+            LOGGER.warning(
+                "Sender data directory not configured. "
+                "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/incoming/)"
+            )
+            return 0
+
+        # Scan directory for new files
+        LOGGER.info(
+            "Scanning sender directory for new files",
+            extra={"event": "sender_scan_start", "directory": config.sender_data_directory},
+        )
+        files_to_process = _scan_sender_directory(config.sender_data_directory, config.aws_region)
+
+        if not files_to_process:
+            LOGGER.info(
+                "No new file read. Exiting sender workflow (idempotent).",
+                extra={"event": "sender_no_files", "directory": config.sender_data_directory},
+            )
+            return 0
+
+        LOGGER.info(
+            f"Found {len(files_to_process)} file(s) to process in sender directory",
+            extra={"event": "sender_files_found", "file_count": len(files_to_process)},
+        )
+
+        # Process the first file (Day 1 MVP processes one at a time)
+        s3_path, file_name = files_to_process[0]
+        
+        LOGGER.info(
+            f"Processing file: {file_name}",
+            extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
+        )
+
         # 1. Log pipeline start
         log_pipeline_start(
             transfer_session_id=config.transfer_session_id,
@@ -323,7 +458,45 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-            data_file, extract_details = _prepare_sender_data_file(config, tmpdir_path)
+
+            # Download the file from S3
+            try:
+                staged_file, extract_details = _download_from_s3(s3_path, tmpdir_path / file_name, config.aws_region), {
+                    "data_source": "s3_object",
+                    "s3_path": s3_path,
+                    "file_name": file_name,
+                }
+                
+                # Better approach - just download
+                bucket, key = _parse_s3_path(s3_path)
+                client = S3Client(aws_region=config.aws_region)
+                staged_file = tmpdir_path / file_name
+                client.download_file(bucket, key, staged_file)
+                
+                extract_details = {
+                    "data_source": "s3_object",
+                    "s3_path": s3_path,
+                    "file_name": file_name,
+                    "file_size_bytes": staged_file.stat().st_size,
+                }
+            except Exception as e:
+                log_pipeline_complete(
+                    transfer_session_id=config.transfer_session_id,
+                    sender_agency=config.sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    outcome=EventOutcome.FAILURE,
+                    details={"error": f"Failed to download file: {e}"},
+                )
+                raise StorageError(f"Failed to download {s3_path}: {e}") from e
+
+            LOGGER.info(
+                f"File read successfully: {file_name}",
+                extra={
+                    "event": "sender_file_read",
+                    "file_name": file_name,
+                    "file_size_bytes": extract_details.get("file_size_bytes"),
+                },
+            )
 
             log_extract_data(
                 transfer_session_id=config.transfer_session_id,
@@ -333,7 +506,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 details=extract_details,
             )
 
-            # 3. Policy approval check
+            # 2. Policy approval check
             approver = PolicyApprover()
             is_approved = approver.approve_transfer(
                 config.sender_agency,
@@ -359,12 +532,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 details={"file_count": 1},
             )
 
-            # 4. Compress data
+            # 3. Compress data
             archive_path = tmpdir_path / DEFAULT_ARCHIVE_FILE_NAME
-            archive_member_name = _safe_archive_member_name(data_file.name)
-            # Archive creation is limited to a validated relative file name.
+            archive_member_name = _safe_archive_member_name(staged_file.name)
             with tarfile.open(archive_path, "w:gz") as tar:  # NOSONAR
-                tar.add(data_file, arcname=archive_member_name)
+                tar.add(staged_file, arcname=archive_member_name)
 
             log_compress(
                 transfer_session_id=config.transfer_session_id,
@@ -373,8 +545,8 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 outcome=EventOutcome.SUCCESS,
                 details={
                     "compression_type": DEFAULT_COMPRESSION.value,
-                    "source_file_name": data_file.name,
-                    "source_size_bytes": data_file.stat().st_size,
+                    "source_file_name": staged_file.name,
+                    "source_size_bytes": staged_file.stat().st_size,
                     "compressed_size_bytes": archive_path.stat().st_size,
                 },
             )
@@ -414,8 +586,23 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 },
             )
 
-            # 5. Stage artifacts (in Day 1 MVP, this would write to S3)
-            # For testing, we'll just log that staging occurred
+            # 4. Mark file as processed
+            try:
+                _mark_file_processed(file_name, config.sender_data_directory, config.aws_region)
+                LOGGER.info(
+                    f"File marked as processed and moved to processed folder: {file_name}",
+                    extra={
+                        "event": "sender_file_marked",
+                        "file_name": file_name,
+                        "marker_location": f"{config.sender_data_directory}../processed/{file_name}.done",
+                    },
+                )
+            except StorageError as e:
+                LOGGER.warning(
+                    f"Failed to mark file as processed: {e}",
+                    extra={"event": "sender_mark_failed", "file_name": file_name},
+                )
+
             LOGGER.info(
                 "Sender workflow complete",
                 extra={
