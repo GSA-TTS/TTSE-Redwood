@@ -12,7 +12,9 @@ from redwood_dataagent.agent import (
     _create_receiver_workflow,
     _create_sender_workflow,
     _download_from_s3,
+    _mark_file_processed,
     _parse_s3_path,
+    _scan_sender_directory,
     run_agent,
 )
 from redwood_dataagent.config import AgentConfig
@@ -290,6 +292,96 @@ class TestReceiverWorkflow:
             mock_start.side_effect = RuntimeError("Test error")
             exit_code = _create_receiver_workflow(config)
             assert exit_code == 1
+
+    def test_receiver_workflow_logs_all_paths(self) -> None:
+        """Receiver workflow logs start through complete for success path."""
+        config = self._make_config()
+
+        with patch("redwood_dataagent.agent.log_pipeline_start") as mock_start:
+            with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete:
+                exit_code = _create_receiver_workflow(config)
+                assert exit_code == 0
+                mock_start.assert_called_once()
+                mock_complete.assert_called_once()
+
+
+class TestScanSenderDirectory:
+    """Tests for _scan_sender_directory() function."""
+
+    def test_scan_sender_directory_returns_tuples(self) -> None:
+        """_scan_sender_directory returns list of (s3_path, file_name) tuples."""
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+            mock_client.s3_client.list_objects_v2.return_value = {
+                "Contents": [{"Key": "incoming/file1.json"}]
+            }
+            mock_client.s3_client.head_object.side_effect = Exception("No marker")
+
+            result = _scan_sender_directory("s3://bucket/incoming/", "us-east-1")
+            
+            assert isinstance(result, list)
+            assert len(result) == 1
+            assert result[0][0].startswith("s3://")
+            assert result[0][1] == "file1.json"
+
+
+class TestMarkFileProcessed:
+    """Tests for _mark_file_processed() function."""
+
+    def test_mark_file_processed_creates_marker(self) -> None:
+        """_mark_file_processed creates done marker in processed folder."""
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+            
+            _mark_file_processed("test.json", "s3://bucket/incoming/", "us-east-1")
+            
+            mock_client.s3_client.put_object.assert_called_once()
+            call_kwargs = mock_client.s3_client.put_object.call_args[1]
+            assert "processed" in call_kwargs["Key"]
+            assert "test.json" in call_kwargs["Key"]
+
+
+class TestErrorPaths:
+    """Tests for error handling in sender workflow."""
+
+    def test_sender_workflow_with_mark_file_failure(self, tmp_path) -> None:
+        """Sender workflow handles mark_file_processed errors gracefully."""
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1}]')
+        config = AgentConfig(
+            agent_mode="sender",
+            tenant="tts",
+            environment="development",
+            aws_region="us-east-1",
+            log_level="INFO",
+            transfer_session_id="session-123",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            sender_staging_bucket="tts-core-development-dot-data-staging",
+            receiver_landing_bucket="tts-core-development-gsa-data-landing",
+            receiver_target_bucket="tts-core-development-gsa-data-target",
+            sender_data_directory="s3://bucket/incoming/",
+        )
+
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                with patch("redwood_dataagent.agent._mark_file_processed") as mock_mark:
+                    mock_client = MagicMock()
+                    mock_s3_class.return_value = mock_client
+                    
+                    def mock_download(bucket, key, dest):
+                        import shutil
+                        shutil.copy2(test_file, dest)
+                    
+                    mock_client.download_file.side_effect = mock_download
+                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    mock_mark.side_effect = Exception("Mark failed")
+                    
+                    # Mark failure should cause workflow to fail
+                    exit_code = _create_sender_workflow(config)
+                    assert exit_code == 1
 
 
 class TestRunAgent:
