@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import time
 import traceback
 
 from .agent import run_agent
@@ -46,33 +47,47 @@ def main() -> int:
         # This enables correlation of all logs for this transfer across the entire pipeline
         set_transfer_session_id(config.transfer_session_id)
 
-        # Execute agent with fully configured context
+        # Run agent on 5-minute scheduler loop for long-running stateless deployment
         logger.info(
-            "Executing agent workflow",
-            extra={"event": "workflow_start"},
+            "Starting 5-minute scheduler loop",
+            extra={"event": "scheduler_start", "interval_seconds": 300},
         )
-        result = run_agent(config)
-
-        if result == 0:
-            # Successful execution - idle to prevent restart loop
-            logger.info(
-                "Agent workflow completed successfully, idling until next event or pod restart",
-                extra={"event": "agent_idle_start"},
-            )
-            # Sleep forever - pod will be restarted by Flux or manual intervention
-            print("Agent idle - waiting for SIGTERM", file=sys.stdout, flush=True)
-            try:
-                signal.pause()  # Waits for SIGTERM on pod deletion
-            except KeyboardInterrupt:
-                logger.info("Agent interrupted, shutting down")
-                return 0
-        else:
-            logger.error(
-                f"Agent workflow failed with exit code {result}",
-                extra={"event": "agent_failure", "exit_code": result},
-            )
         
-        return result
+        SCHEDULER_INTERVAL = 300  # 5 minutes in seconds
+        
+        def handle_sigterm(signum, frame):
+            """Handle SIGTERM gracefully - exit the scheduler loop."""
+            logger.info("SIGTERM received, shutting down gracefully")
+            raise KeyboardInterrupt()
+        
+        # Register SIGTERM handler for graceful shutdown
+        signal.signal(signal.SIGTERM, handle_sigterm)
+        
+        try:
+            while True:
+                # Execute agent with fully configured context
+                logger.info(
+                    "Executing agent workflow",
+                    extra={"event": "workflow_start"},
+                )
+                result = run_agent(config)
+                
+                if result == 0:
+                    logger.info(
+                        f"Agent workflow completed, sleeping {SCHEDULER_INTERVAL}s until next run",
+                        extra={"event": "agent_sleep", "sleep_seconds": SCHEDULER_INTERVAL},
+                    )
+                else:
+                    logger.error(
+                        f"Agent workflow failed with exit code {result}, sleeping {SCHEDULER_INTERVAL}s until retry",
+                        extra={"event": "agent_failure", "exit_code": result, "sleep_seconds": SCHEDULER_INTERVAL},
+                    )
+                
+                # Sleep until next scheduled run
+                time.sleep(SCHEDULER_INTERVAL)
+        except KeyboardInterrupt:
+            logger.info("Scheduler loop terminated, agent shutting down")
+            return 0
         
     except Exception as e:
         # Catch any exceptions during startup or execution and log them to stderr
