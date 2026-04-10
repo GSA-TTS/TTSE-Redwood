@@ -469,18 +469,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
             # Download the file from S3
             try:
-                staged_file, extract_details = _download_from_s3(s3_path, tmpdir_path / file_name, config.aws_region), {
-                    "data_source": "s3_object",
-                    "s3_path": s3_path,
-                    "file_name": file_name,
-                }
-                
-                # Better approach - just download
                 bucket, key = _parse_s3_path(s3_path)
                 client = S3Client(aws_region=config.aws_region)
                 staged_file = tmpdir_path / file_name
                 client.download_file(bucket, key, staged_file)
-                
+
                 extract_details = {
                     "data_source": "s3_object",
                     "s3_path": s3_path,
@@ -594,7 +587,21 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 },
             )
 
-            # 4. Mark file as processed
+            # 4. Upload artifacts to sender staging bucket
+            staging_client = S3Client(aws_region=config.aws_region)
+            for artifact_path in (archive_path, manifest_path):
+                staging_key = SenderStoragePath.transfers(config.transfer_session_id, artifact_path.name)
+                staging_client.upload_file(artifact_path, config.sender_staging_bucket, staging_key)
+                LOGGER.info(
+                    f"Staged artifact to S3: {artifact_path.name}",
+                    extra={
+                        "event": "sender_artifact_staged",
+                        "bucket": config.sender_staging_bucket,
+                        "key": staging_key,
+                    },
+                )
+
+            # 5. Mark file as processed
             try:
                 _mark_file_processed(file_name, config.sender_data_directory, config.aws_region)
                 LOGGER.info(

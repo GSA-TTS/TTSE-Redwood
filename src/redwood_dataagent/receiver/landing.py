@@ -339,7 +339,7 @@ class ReceiverLandingZone:
             file_content = io.BytesIO()
             
             # Download from S3
-            response = self.s3_client.s3_client.get_object(
+            response = self.s3_client._client.get_object(
                 Bucket=self.landing_bucket,
                 Key=s3_key
             )

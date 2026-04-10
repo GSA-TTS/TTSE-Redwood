@@ -329,7 +329,7 @@ class TestSFTPClientConnect:
         """Test _connect with password authentication."""
         mock_ssh = mock.MagicMock()
         mock_sftp = mock.MagicMock()
-        mock_ssh.open_sftp_client.return_value = mock_sftp
+        mock_ssh.open_sftp.return_value = mock_sftp
         mock_ssh_class.return_value = mock_ssh
 
         client = SFTPClient(
@@ -361,7 +361,7 @@ class TestSFTPClientConnect:
 
         mock_ssh = mock.MagicMock()
         mock_sftp = mock.MagicMock()
-        mock_ssh.open_sftp_client.return_value = mock_sftp
+        mock_ssh.open_sftp.return_value = mock_sftp
         mock_ssh_class.return_value = mock_ssh
 
         client = SFTPClient(

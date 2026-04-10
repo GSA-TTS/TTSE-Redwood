@@ -148,7 +148,7 @@ class SFTPClient:
                     timeout=self._timeout,
                 )
 
-            sftp = ssh.open_sftp_client()
+            sftp = ssh.open_sftp()
             return sftp
         except self._paramiko.AuthenticationException as e:
             raise StorageError(
