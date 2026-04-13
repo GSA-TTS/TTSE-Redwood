@@ -139,6 +139,10 @@ class TestBuildReceiverBucket:
 class TestSenderStoragePath:
     """Test sender-side path builders."""
 
+    def test_incoming_prefix(self):
+        """Verify incoming prefix format used for sender file scan."""
+        assert SenderStoragePath.incoming_prefix() == "incoming/"
+
     def test_transfers_path(self):
         """Verify transfers path format."""
         path = SenderStoragePath.transfers("transfer-001", "data.tar.gz")

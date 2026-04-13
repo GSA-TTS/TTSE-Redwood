@@ -14,6 +14,7 @@ Supported purposes:
 - target: Receiver-side final validated data storage
 
 Path patterns:
+- Sender incoming: incoming/
 - Sender transfers: transfers/{transfer_session_id}/{file_name}
 - Receiver extracted: extracted/{transfer_session_id}/{file_name}
 """
@@ -54,6 +55,11 @@ class SenderStoragePath(BaseModel):
         if not value.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         return value
+
+    @staticmethod
+    def incoming_prefix() -> str:
+        """Build sender incoming prefix for file detection scans."""
+        return "incoming/"
 
     @staticmethod
     def transfers(transfer_session_id: str, file_name: str) -> str:
