@@ -14,8 +14,9 @@ import json
 import shutil
 import tarfile
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from .audit.events import EventOutcome
 from .audit.logger import (
@@ -26,6 +27,8 @@ from .audit.logger import (
     log_pipeline_complete,
     log_pipeline_start,
     log_policy_check,
+    log_sftp_transfer_complete,
+    log_sftp_transfer_start,
     log_store_data,
     log_validate_manifest,
 )
@@ -49,6 +52,46 @@ DEFAULT_COMPRESSION = CompressionType.GZIP
 DEFAULT_DATA_FILE_NAME = "data.json"
 DEFAULT_ARCHIVE_FILE_NAME = "transfer.tar.gz"
 DEFAULT_MANIFEST_FILE_NAME = "manifest.json"
+DEFAULT_RETRY_ATTEMPTS = 3
+
+T = TypeVar("T")
+
+
+def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
+    """Retry an operation for transient failures before raising StorageError."""
+    last_error: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:  # pragma: no cover - exercised via caller paths
+            last_error = exc
+            if attempt < attempts:
+                LOGGER.warning(
+                    "Retrying operation after failure",
+                    extra={
+                        "event": "operation_retry",
+                        "operation": operation_name,
+                        "attempt": attempt,
+                        "max_attempts": attempts,
+                        "error": str(exc),
+                    },
+                )
+
+    raise StorageError(
+        f"{operation_name} failed after {attempts} attempts: {last_error}"
+    ) from last_error
+
+
+def _build_processed_marker_key(key: str) -> str:
+    """Build marker object key for a processed incoming file."""
+    if key.startswith("incoming/"):
+        return key.replace("incoming/", "processed/", 1) + ".done"
+
+    if "/incoming/" in key:
+        return key.replace("/incoming/", "/processed/", 1) + ".done"
+
+    return f"processed/{Path(key).name}.done"
 
 
 def _extract_data(config: AgentConfig) -> None:
@@ -82,7 +125,13 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
         If directory listing fails
     """
     try:
-        bucket, prefix = _parse_s3_path(directory_path)
+        parsed = _parse_s3_path(directory_path)
+        if parsed is None:
+            raise StorageError(
+                f"Sender directory must be an S3 path, got: {directory_path}"
+            )
+
+        bucket, prefix = parsed
         client = S3Client(aws_region=aws_region)
         
         # List objects in the incoming directory
@@ -107,7 +156,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
             
             # Check if file has been processed (marker exists in processed/)
             # Construct absolute path: replace 'incoming/' with 'processed/'
-            processed_marker_key = key.replace("incoming/", "processed/") + ".done"
+            processed_marker_key = _build_processed_marker_key(key)
             try:
                 client._client.head_object(Bucket=bucket, Key=processed_marker_key)
                 LOGGER.debug(f"Skipping already processed file: {key}")
@@ -142,14 +191,23 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
         If marker creation fails
     """
     try:
-        bucket, prefix = _parse_s3_path(directory_path)
+        parsed = _parse_s3_path(directory_path)
+        if parsed is None:
+            raise StorageError(
+                f"Sender directory must be an S3 path, got: {directory_path}"
+            )
+
+        bucket, prefix = parsed
         client = S3Client(aws_region=aws_region)
         
         # Create marker in processed/ directory using absolute path
         # Replace 'incoming/' with 'processed/' in the prefix
-        processed_prefix = prefix.replace("incoming/", "processed/")
+        if not prefix.endswith("/"):
+            prefix = f"{prefix}/"
+
+        processed_prefix = prefix.replace("incoming/", "processed/", 1)
         marker_key = f"{processed_prefix}{file_name}.done"
-        timestamp = Path(marker_key).name or "data"
+        timestamp = datetime.now(timezone.utc).isoformat()
         marker_metadata = {
             "processed_at": timestamp,
             "original_file": file_name,
@@ -435,9 +493,24 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             "Scanning sender directory for new files",
             extra={"event": "sender_scan_start", "directory": config.sender_data_directory},
         )
-        files_to_process = _scan_sender_directory(config.sender_data_directory, config.aws_region)
+        files_to_process = _retry_operation(
+            "detect_files",
+            lambda: _scan_sender_directory(config.sender_data_directory, config.aws_region),
+        )
 
         if not files_to_process:
+            log_extract_data(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                outcome=EventOutcome.SUCCESS,
+                details={
+                    "step": "detect",
+                    "directory": config.sender_data_directory,
+                    "file_count": 0,
+                    "message": "No new files found",
+                },
+            )
             LOGGER.info(
                 "No new file read. Exiting sender workflow (idempotent).",
                 extra={"event": "sender_no_files", "directory": config.sender_data_directory},
@@ -457,6 +530,20 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
         )
 
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.SUCCESS,
+            details={
+                "step": "detect",
+                "directory": config.sender_data_directory,
+                "file_count": len(files_to_process),
+                "selected_file": file_name,
+                "selected_path": s3_path,
+            },
+        )
+
         # 1. Log pipeline start
         log_pipeline_start(
             transfer_session_id=config.transfer_session_id,
@@ -469,18 +556,14 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
             # Download the file from S3
             try:
-                staged_file, extract_details = _download_from_s3(s3_path, tmpdir_path / file_name, config.aws_region), {
-                    "data_source": "s3_object",
-                    "s3_path": s3_path,
-                    "file_name": file_name,
-                }
-                
-                # Better approach - just download
                 bucket, key = _parse_s3_path(s3_path)
                 client = S3Client(aws_region=config.aws_region)
                 staged_file = tmpdir_path / file_name
-                client.download_file(bucket, key, staged_file)
-                
+                _retry_operation(
+                    "download_sender_file",
+                    lambda: client.download_file(bucket, key, staged_file),
+                )
+
                 extract_details = {
                     "data_source": "s3_object",
                     "s3_path": s3_path,
@@ -488,6 +571,17 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                     "file_size_bytes": staged_file.stat().st_size,
                 }
             except Exception as e:
+                log_extract_data(
+                    transfer_session_id=config.transfer_session_id,
+                    sender_agency=config.sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    outcome=EventOutcome.FAILURE,
+                    details={
+                        "step": "detect",
+                        "selected_path": s3_path,
+                        "error": f"Failed to download file: {e}",
+                    },
+                )
                 log_pipeline_complete(
                     transfer_session_id=config.transfer_session_id,
                     sender_agency=config.sender_agency,
@@ -543,8 +637,20 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             # 3. Compress data
             archive_path = tmpdir_path / DEFAULT_ARCHIVE_FILE_NAME
             archive_member_name = _safe_archive_member_name(staged_file.name)
-            with tarfile.open(archive_path, "w:gz") as tar:  # NOSONAR
-                tar.add(staged_file, arcname=archive_member_name)
+            try:
+                _retry_operation(
+                    "compress_sender_data",
+                    lambda: _compress_sender_data(archive_path, staged_file, archive_member_name),
+                )
+            except Exception as e:
+                log_compress(
+                    transfer_session_id=config.transfer_session_id,
+                    sender_agency=config.sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    outcome=EventOutcome.FAILURE,
+                    details={"step": "compress", "source_file_name": staged_file.name, "error": str(e)},
+                )
+                raise
 
             log_compress(
                 transfer_session_id=config.transfer_session_id,
@@ -577,7 +683,20 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             )
 
             manifest_path = tmpdir_path / DEFAULT_MANIFEST_FILE_NAME
-            _write_sender_manifest_output(manifest, manifest_path)
+            try:
+                _retry_operation(
+                    "write_manifest",
+                    lambda: _write_sender_manifest_output(manifest, manifest_path),
+                )
+            except Exception as e:
+                log_manifest_created(
+                    transfer_session_id=config.transfer_session_id,
+                    sender_agency=config.sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    outcome=EventOutcome.FAILURE,
+                    details={"step": "manifest", "error": str(e)},
+                )
+                raise
 
             log_manifest_created(
                 transfer_session_id=config.transfer_session_id,
@@ -594,22 +713,78 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 },
             )
 
-            # 4. Mark file as processed
-            try:
-                _mark_file_processed(file_name, config.sender_data_directory, config.aws_region)
+            # 4. Upload artifacts to sender staging bucket
+            staging_client = S3Client(aws_region=config.aws_region)
+            total_uploaded_bytes = 0
+            log_sftp_transfer_start(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                destination_host=config.sender_staging_bucket,
+                details={"step": "stage_upload", "artifact_count": 2},
+            )
+            for artifact_path in (archive_path, manifest_path):
+                staging_key = SenderStoragePath.transfers(config.transfer_session_id, artifact_path.name)
+                try:
+                    _retry_operation(
+                        "stage_upload",
+                        lambda: staging_client.upload_file(
+                            artifact_path, config.sender_staging_bucket, staging_key
+                        ),
+                    )
+                except Exception as e:
+                    log_sftp_transfer_complete(
+                        transfer_session_id=config.transfer_session_id,
+                        sender_agency=config.sender_agency,
+                        receiver_agency=config.receiver_agency,
+                        destination_host=config.sender_staging_bucket,
+                        outcome=EventOutcome.FAILURE,
+                        details={
+                            "step": "stage_upload",
+                            "artifact_name": artifact_path.name,
+                            "staging_key": staging_key,
+                            "error": str(e),
+                        },
+                    )
+                    raise
+
+                total_uploaded_bytes += artifact_path.stat().st_size
                 LOGGER.info(
-                    f"File marked as processed and moved to processed folder: {file_name}",
+                    f"Staged artifact to S3: {artifact_path.name}",
                     extra={
-                        "event": "sender_file_marked",
-                        "file_name": file_name,
-                        "marker_location": f"{config.sender_data_directory}../processed/{file_name}.done",
+                        "event": "sender_artifact_staged",
+                        "bucket": config.sender_staging_bucket,
+                        "key": staging_key,
                     },
                 )
-            except StorageError as e:
-                LOGGER.warning(
-                    f"Failed to mark file as processed: {e}",
-                    extra={"event": "sender_mark_failed", "file_name": file_name},
-                )
+
+            log_sftp_transfer_complete(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                destination_host=config.sender_staging_bucket,
+                outcome=EventOutcome.SUCCESS,
+                bytes_transferred=total_uploaded_bytes,
+                details={
+                    "step": "stage_upload",
+                    "artifact_count": 2,
+                    "staging_prefix": f"transfers/{config.transfer_session_id}/",
+                },
+            )
+
+            # 5. Mark file as processed
+            _retry_operation(
+                "mark_file_processed",
+                lambda: _mark_file_processed(file_name, config.sender_data_directory, config.aws_region),
+            )
+            LOGGER.info(
+                f"File marked as processed and moved to processed folder: {file_name}",
+                extra={
+                    "event": "sender_file_marked",
+                    "file_name": file_name,
+                    "marker_location": f"{config.sender_data_directory}../processed/{file_name}.done",
+                },
+            )
 
             LOGGER.info(
                 "Sender workflow complete",
@@ -647,6 +822,12 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             details={"error": str(e)},
         )
         return 1
+
+
+def _compress_sender_data(archive_path: Path, staged_file: Path, archive_member_name: str) -> None:
+    """Create transfer archive for sender payload."""
+    with tarfile.open(archive_path, "w:gz") as tar:  # NOSONAR
+        tar.add(staged_file, arcname=archive_member_name)
 
 
 def _create_receiver_workflow(config: AgentConfig) -> int:

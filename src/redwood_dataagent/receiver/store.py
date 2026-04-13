@@ -187,7 +187,7 @@ class ReceiverTargetStore:
             True if marker exists (already stored), False otherwise
         """
         try:
-            self.s3_client.s3_client.head_object(
+            self.s3_client._client.head_object(
                 Bucket=self.target_bucket,
                 Key=marker_key
             )
@@ -207,7 +207,7 @@ class ReceiverTargetStore:
             StorageError: If upload fails
         """
         try:
-            self.s3_client.s3_client.put_object(
+            self.s3_client._client.put_object(
                 Bucket=self.target_bucket,
                 Key=s3_key,
                 Body=file_obj,
@@ -246,7 +246,7 @@ class ReceiverTargetStore:
                 "total_bytes": total_bytes,
             }
 
-            self.s3_client.s3_client.put_object(
+            self.s3_client._client.put_object(
                 Bucket=self.target_bucket,
                 Key=marker_key,
                 Body=json.dumps(marker_metadata).encode("utf-8"),

@@ -23,7 +23,7 @@ from redwood_dataagent.receiver.landing import ReceiverLandingZone
 def mock_s3_client():
     """Mock S3Client instance."""
     client = mock.MagicMock(spec=S3Client)
-    client.s3_client = mock.MagicMock()
+    client._client = mock.MagicMock()
     return client
 
 
@@ -96,7 +96,7 @@ class TestReceiverLandingZoneFetch:
                 return archive_response
             raise ValueError(f"Unexpected key: {kwargs['Key']}")
         
-        receiver_landing_zone.s3_client.s3_client.get_object.side_effect = get_object_side_effect
+        receiver_landing_zone.s3_client._client.get_object.side_effect = get_object_side_effect
 
         archive_bytes, manifest_dict = receiver_landing_zone.fetch_from_landing_bucket(
             transfer_session_id="transfer-20260406-001",
@@ -106,11 +106,11 @@ class TestReceiverLandingZoneFetch:
 
         assert archive_bytes == sample_archive
         assert manifest_dict["transfer_session_id"] == "transfer-20260406-001"
-        assert receiver_landing_zone.s3_client.s3_client.get_object.call_count == 2
+        assert receiver_landing_zone.s3_client._client.get_object.call_count == 2
 
     def test_fetch_missing_manifest(self, receiver_landing_zone):
         """Test fetch fails when manifest is not found in S3."""
-        receiver_landing_zone.s3_client.s3_client.get_object.side_effect = Exception(
+        receiver_landing_zone.s3_client._client.get_object.side_effect = Exception(
             "NoSuchKey"
         )
 
@@ -123,7 +123,7 @@ class TestReceiverLandingZoneFetch:
 
     def test_fetch_s3_error(self, receiver_landing_zone):
         """Test fetch fails on S3 error."""
-        receiver_landing_zone.s3_client.s3_client.get_object.side_effect = Exception(
+        receiver_landing_zone.s3_client._client.get_object.side_effect = Exception(
             "AccessDenied"
         )
 
@@ -342,7 +342,7 @@ class TestReceiverLandingZoneIntegration:
                 return archive_response
             raise ValueError(f"Unexpected key: {kwargs['Key']}")
         
-        receiver_landing_zone.s3_client.s3_client.get_object.side_effect = get_object_side_effect
+        receiver_landing_zone.s3_client._client.get_object.side_effect = get_object_side_effect
 
         # Step 1: Fetch
         archive_bytes, manifest_dict = receiver_landing_zone.fetch_from_landing_bucket(

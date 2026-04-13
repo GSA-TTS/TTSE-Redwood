@@ -23,7 +23,7 @@ from redwood_dataagent.receiver.store import ReceiverTargetStore
 def mock_s3_client():
     """Mock S3Client instance."""
     client = mock.MagicMock(spec=S3Client)
-    client.s3_client = mock.MagicMock()
+    client._client = mock.MagicMock()
     return client
 
 
@@ -62,8 +62,8 @@ class TestReceiverTargetStoreSuccess:
     def test_store_success(self, receiver_target_store, sample_extracted_files):
         """Test successful store of files to target S3."""
         # Mock S3 responses
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         result = receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -80,8 +80,8 @@ class TestReceiverTargetStoreSuccess:
 
     def test_store_preserves_directory_structure(self, receiver_target_store, sample_extracted_files):
         """Test that directory structure is preserved in target bucket."""
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -91,7 +91,7 @@ class TestReceiverTargetStoreSuccess:
         )
 
         # Check that put_object was called with correct keys
-        calls = receiver_target_store.s3_client.s3_client.put_object.call_args_list
+        calls = receiver_target_store.s3_client._client.put_object.call_args_list
 
         # Should have been called for: file1.txt, file2.csv, file3.json, .stored marker
         expected_keys = [
@@ -107,8 +107,8 @@ class TestReceiverTargetStoreSuccess:
 
     def test_store_creates_marker_object(self, receiver_target_store, sample_extracted_files):
         """Test that marker object is created for idempotency."""
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -119,7 +119,7 @@ class TestReceiverTargetStoreSuccess:
 
         # Find the marker put_object call
         marker_call = None
-        for call in receiver_target_store.s3_client.s3_client.put_object.call_args_list:
+        for call in receiver_target_store.s3_client._client.put_object.call_args_list:
             if call.kwargs["Key"] == "transfers/transfer-20260407-001/.stored":
                 marker_call = call
                 break
@@ -139,8 +139,8 @@ class TestReceiverTargetStoreIdempotency:
     def test_store_idempotency_skip_on_retry(self, receiver_target_store, sample_extracted_files):
         """Test that retry with same transfer_session_id skips re-upload."""
         # First attempt: marker doesn't exist
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         result1 = receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -150,11 +150,11 @@ class TestReceiverTargetStoreIdempotency:
         )
 
         assert result1["status"] == "stored"
-        initial_put_count = receiver_target_store.s3_client.s3_client.put_object.call_count
+        initial_put_count = receiver_target_store.s3_client._client.put_object.call_count
 
         # Second attempt: marker exists (idempotency)
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = None
-        receiver_target_store.s3_client.s3_client.head_object.return_value = {"ContentLength": 100}
+        receiver_target_store.s3_client._client.head_object.side_effect = None
+        receiver_target_store.s3_client._client.head_object.return_value = {"ContentLength": 100}
 
         result2 = receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -165,12 +165,12 @@ class TestReceiverTargetStoreIdempotency:
 
         assert result2["status"] == "already_stored"
         # put_object should not be called again (only for marker creation on first attempt)
-        assert receiver_target_store.s3_client.s3_client.put_object.call_count == initial_put_count
+        assert receiver_target_store.s3_client._client.put_object.call_count == initial_put_count
 
     def test_store_idempotency_marker_key_check(self, receiver_target_store, sample_extracted_files):
         """Test that correct marker key is checked for idempotency."""
-        receiver_target_store.s3_client.s3_client.head_object.return_value = {"ContentLength": 100}
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.return_value = {"ContentLength": 100}
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -180,7 +180,7 @@ class TestReceiverTargetStoreIdempotency:
         )
 
         # Verify head_object was called with correct marker key
-        receiver_target_store.s3_client.s3_client.head_object.assert_called_once_with(
+        receiver_target_store.s3_client._client.head_object.assert_called_once_with(
             Bucket="tts-core-dev-gsa-data-target",
             Key="transfers/transfer-20260407-001/.stored"
         )
@@ -191,8 +191,8 @@ class TestReceiverTargetStoreErrors:
 
     def test_store_s3_upload_error(self, receiver_target_store, sample_extracted_files):
         """Test handling of S3 upload errors."""
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.side_effect = Exception("AccessDenied")
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.side_effect = Exception("AccessDenied")
 
         with pytest.raises(StorageError, match="Failed to.*upload"):
             receiver_target_store.store_to_target(
@@ -204,7 +204,7 @@ class TestReceiverTargetStoreErrors:
 
     def test_store_marker_creation_error(self, receiver_target_store, sample_extracted_files):
         """Test handling of marker object creation errors."""
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
 
         def put_object_side_effect(**kwargs):
             # First calls (files) succeed, marker creation fails
@@ -212,7 +212,7 @@ class TestReceiverTargetStoreErrors:
                 raise Exception("AccessDenied on marker")
             return None
 
-        receiver_target_store.s3_client.s3_client.put_object.side_effect = put_object_side_effect
+        receiver_target_store.s3_client._client.put_object.side_effect = put_object_side_effect
 
         with pytest.raises(StorageError, match="Failed to create marker"):
             receiver_target_store.store_to_target(
@@ -225,8 +225,8 @@ class TestReceiverTargetStoreErrors:
     def test_store_nonexistent_directory(self, receiver_target_store):
         """Test that nonexistent directory results in 0 files stored."""
         # When directory doesn't exist, rglob returns empty and we get 0 files
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         result = receiver_target_store.store_to_target(
             extracted_files_dir=Path("/nonexistent/directory"),
@@ -246,8 +246,8 @@ class TestReceiverTargetStoreMarkerObject:
 
     def test_marker_metadata_format(self, receiver_target_store, sample_extracted_files):
         """Test that marker object has correct metadata format."""
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -258,7 +258,7 @@ class TestReceiverTargetStoreMarkerObject:
 
         # Get the marker put_object call
         marker_call = None
-        for call in receiver_target_store.s3_client.s3_client.put_object.call_args_list:
+        for call in receiver_target_store.s3_client._client.put_object.call_args_list:
             if ".stored" in call.kwargs["Key"]:
                 marker_call = call
                 break
@@ -282,8 +282,8 @@ class TestReceiverTargetStoreMarkerObject:
 
     def test_marker_tagging_format(self, receiver_target_store, sample_extracted_files):
         """Test that marker object tags are correctly formatted."""
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         receiver_target_store.store_to_target(
             extracted_files_dir=sample_extracted_files,
@@ -294,7 +294,7 @@ class TestReceiverTargetStoreMarkerObject:
 
         # Get the marker put_object call
         marker_call = None
-        for call in receiver_target_store.s3_client.s3_client.put_object.call_args_list:
+        for call in receiver_target_store.s3_client._client.put_object.call_args_list:
             if ".stored" in call.kwargs["Key"]:
                 marker_call = call
                 break
@@ -321,8 +321,8 @@ class TestReceiverTargetStoreFileHandling:
         # Create one file
         (extract_dir / "file1.txt").write_text("content")
 
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         result = receiver_target_store.store_to_target(
             extracted_files_dir=extract_dir,
@@ -343,8 +343,8 @@ class TestReceiverTargetStoreFileHandling:
         large_file = extract_dir / "large_file.bin"
         large_file.write_bytes(b"x" * (1024 * 1024))
 
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         result = receiver_target_store.store_to_target(
             extracted_files_dir=extract_dir,
@@ -362,8 +362,8 @@ class TestReceiverTargetStoreIntegration:
 
     def test_complete_store_workflow(self, receiver_target_store, sample_extracted_files):
         """Test complete workflow: check idempotency, store, create marker."""
-        receiver_target_store.s3_client.s3_client.head_object.side_effect = Exception("NoSuchKey")
-        receiver_target_store.s3_client.s3_client.put_object.return_value = None
+        receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
+        receiver_target_store.s3_client._client.put_object.return_value = None
 
         # Execute store
         result = receiver_target_store.store_to_target(
@@ -379,5 +379,5 @@ class TestReceiverTargetStoreIntegration:
         assert result["target_location"] == "s3://tts-core-dev-gsa-data-target/transfers/transfer-20260407-001/"
 
         # Verify S3 operations
-        assert receiver_target_store.s3_client.s3_client.head_object.called
-        assert receiver_target_store.s3_client.s3_client.put_object.called
+        assert receiver_target_store.s3_client._client.head_object.called
+        assert receiver_target_store.s3_client._client.put_object.called

@@ -5,7 +5,7 @@
 ### Primary Objectives
 1. **End-to-End Data Transfer**: Implement a complete flow from Sender Agency (DOT) object storage (S3, Azure Blob, or equivalent) to SFTP to Receiver Agency (GSA)
 2. **Parameterized Agencies**: Support dynamic sender and receiver agencies rather than hard-coding DOT and GSA
-3. **Event-Driven Architecture**: Sender-side storage event triggers the Sender Agent container; GSA S3 Put event triggers receiver processing
+3. **In-Container Polling (Day 1)**: Sender Agent polls the incoming S3 prefix every 5 minutes for new files; receiver polling follows the same pattern. S3 Events (via SQS/Lambda) are deferred to a future phase to reduce Day 1 resource and permissions complexity.
 4. **Security First**: Encryption at rest in S3 and encryption in transit over SSH/SFTP
 5. **Operational Visibility**: Structured logging and audit trail
 
@@ -109,8 +109,8 @@
 
 **Key Difference from ADR 003:** The Day 1 MVP does not use bidirectional requests.
 
-1. **Sender Storage Event Triggered at DOT**: A file arrives in DOT sender-side object storage (for example S3 Put, Blob created, or equivalent event).
-2. **Sender Event to Sender Agent**: Sender agency configures its own eventing to trigger the Sender Agent container.
+1. **Sender Agent Polls Incoming Prefix**: The Sender Agent container scans the configured incoming S3 prefix (e.g. `s3://bucket/incoming/`) on a 5-minute interval. Files with an existing `.done` marker in `processed/` are skipped.
+2. **File Picked Up for Processing**: When an unprocessed file is found, the agent picks up the first available file and begins the sender workflow.
 3. **Sender Workflow**:
    - Read the intended sender-owned data file from sender-side object storage
    - Generate the canonical transfer manifest from the sender data file metadata
@@ -124,7 +124,7 @@
    - Sender uploads compressed data and manifest artifacts
    - Receiver-side SFTP landing writes to GSA S3 landing storage
 5. **Receiver Workflow**:
-   - GSA configures S3 Put event on landing bucket to trigger receiver processing
+   - Receiver Agent polls the GSA landing S3 prefix on a 5-minute interval to detect new transfers
    - Validate checksums against manifest metadata
    - Decompress validated payloads
    - Store validated data in the receiver target bucket
@@ -166,20 +166,21 @@ Examples:
 sender-data-staging/
 ├── transfers/
 │   └── {transfer_session_id}/
-│       ├── data.tar.gz
-│       ├── data.tar.gz.asc  (future signing)
+│       ├── transfer.tar.gz
+│       ├── transfer.tar.gz.asc  (future signing)
 │       └── manifest.json
 
 tts-core-dev-gsa-data-landing/
 ├── transfers/
 │   └── {transfer_session_id}/
-│       ├── data.tar.gz
+│       ├── transfer.tar.gz
 │       └── manifest.json
 
 tts-core-dev-gsa-data-target/
-├── extracted/
+├── transfers/
 │   └── {transfer_session_id}/
-│       └── {extracted_files}
+│       └── {sender_agency}/
+│           └── {extracted_files}
 ```
 
 ### AWS Transfer Family SFTP Servers
@@ -210,9 +211,12 @@ ttse-redwood/
 │   ├── config.py
 │   ├── agent.py
 │   ├── logging_utils.py
+│   ├── exceptions.py
 │   ├── audit/
-│   ├── sender/
 │   ├── receiver/
+│   ├── sftp/
+│   ├── storage/
+│   ├── policy/
 │   ├── aws/
 │   └── models/
 ├── tests/
@@ -252,7 +256,7 @@ ttse-redwood/
 | Core | `TRANSFER_SESSION_ID` | Correlation identifier for one transfer session |
 | Agency | `SENDER_AGENCY` | Sender agency code |
 | Agency | `RECEIVER_AGENCY` | Receiver agency code |
-| Input | `SENDER_DATA_FILE` | Path to the sender-owned source data file used by the sender workflow (required for Day 1 runs) |
+| Input | `SENDER_DATA_DIRECTORY` | S3 directory path scanned for incoming files (e.g. `s3://bucket/incoming/`); required for sender-mode runs |
 | SFTP | `SFTP_HOST` | Receiver-side SFTP endpoint (follow-up PR scope) |
 | SFTP | `SFTP_PORT` | SSH and SFTP port (follow-up PR scope) |
 | SFTP | `SFTP_USERNAME` | Username used by the sender container (follow-up PR scope) |
@@ -321,13 +325,14 @@ The full Day 1 target runtime configuration should capture:
 - Uploads compressed data and manifest artifacts to receiver landing storage
 
 #### Sender Triggering Assumption (Day 1)
-- Sender agency owns and configures its own event trigger from sender storage to sender container runtime.
-- Trigger mechanism is implementation-specific to sender platform (for example S3 Put, Blob created, or equivalent event source).
+- The Sender Agent runs as a scheduled container job that polls the configured `SENDER_DATA_DIRECTORY` S3 prefix every 5 minutes.
+- Files already processed are tracked via `.done` marker objects in `processed/`, making runs idempotent.
+- S3 Events (S3 Put → SQS → Lambda/container trigger) are the intended future approach but are deferred to reduce Day 1 setup complexity and required permissions.
 
 ### 6.3 Receiver Workflow
 
 **Note:** Receiver processes can run on any container platform.
-**Day 1 GSA Trigger:** GSA configures S3 Put event on landing bucket to trigger validation and decompression flow.
+**Day 1 GSA Trigger:** The Receiver Agent polls the GSA landing S3 prefix on a 5-minute interval. S3 Put event-based triggering (SQS/Lambda) is deferred to a future phase.
 
 #### Manifest Validation
 - Reads manifest metadata from landing storage
@@ -406,8 +411,8 @@ Day 1 validation rule:
 1. Every operation emits a structured event.
 2. Each event includes `transfer_session_id` for correlation.
 3. Events are expected to flow through centralized logging and observability tooling.
-4. Day 1 sender events are initiated by sender-configured storage event triggers.
-5. Day 1 receiver events are initiated by GSA S3 Put event on landing storage.
+4. Day 1 sender events are initiated when the polling loop detects an unprocessed file in the incoming S3 prefix.
+5. Day 1 receiver events are initiated when the polling loop detects a new transfer in the GSA landing S3 prefix.
 6. Sender events cover extraction, approval, compression, manifest creation, transfer start, transfer complete, and pipeline completion.
 7. Receiver events cover validation, decompression, storage, and pipeline completion.
 
@@ -435,22 +440,23 @@ Note: this sequence is intentionally high level and can be adjusted as implement
 - Establish logging, audit, and error-handling expectations
 - Define storage naming and folder conventions for sender storage and GSA landing and target buckets as GSA's initial proposal for later sender alignment
 
-### Phase 1B: Sender Trigger and Sender Workflow
-- Define sender-side trigger assumption and integration point from sender object storage to sender container runtime
+### Phase 1B: Sender Polling and Sender Workflow
+- Implement 5-minute in-container polling loop scanning `SENDER_DATA_DIRECTORY` S3 prefix for unprocessed files
+- Implement `.done` marker pattern in `processed/` prefix for idempotent run tracking
 - Implement sender-owned file pickup and review at sender side; Day 1 sender runs require a sender-provided data file
 - Implement always-approve policy step for MVP
 - Implement canonical sender-manifest creation from sender payload metadata
 - Implement handoff from sender staging storage to SFTP upload path
 
 ### Phase 1C: GSA Landing and Receiver Workflow
-- Define GSA landing bucket event trigger using S3 Put event
+- Implement 5-minute in-container polling loop scanning GSA landing S3 prefix for new transfers
 - Implement landing-to-validation flow on GSA side
 - Implement manifest validation and decompression
 - Implement write path from validated payload to GSA target bucket
 
 ### Phase 1D: Platform Integrations
 - Implement sender storage integration in a way that can support S3, Blob, or equivalent object storage patterns
-- Implement GSA AWS-specific integrations for landing, target storage, and event trigger wiring assumptions
+- Implement GSA AWS-specific integrations for landing, target storage, and polling-based trigger assumptions (S3 event wiring deferred to future phase)
 - Implement SFTP endpoint integration and secret retrieval for SSH credentials
 
 ### Phase 1E: End-to-End Orchestration and Verification
@@ -461,7 +467,7 @@ Note: this sequence is intentionally high level and can be adjusted as implement
 
 ### Phase 1F: Documentation and Operational Readiness
 - Capture sender-side assumptions, including sender-managed trigger setup
-- Capture GSA-side assumptions, including S3 Put event setup on landing bucket
+- Capture GSA-side assumptions, including polling-based landing detection for Day 1 and S3 event wiring as the future target
 - Update `docs/operations/`, `docs/architecture/`, `docs/reference/`, and `docs/mvp/`
 - Prepare GSA-owned manifest and naming convention proposal to share with DOT when coordination begins
 - Document open items that remain outside Day 1 scope, such as production policy checks, retries, and non-happy-path recovery
@@ -515,10 +521,10 @@ Test dependencies:
 
 MVP Day 1 is complete when:
 
-1. Sender-side storage event (S3 Put, Blob created, or equivalent) triggers the Sender Agent container, configured by sender agency.
+1. Sender Agent polls the incoming S3 prefix on a 5-minute interval and picks up unprocessed files. Processed files are tracked via `.done` markers.
 2. Sender workflow completes sender file review, policy approval, canonical manifest creation, compression, and staging.
 3. SFTP transfer uploads compressed data from sender staging to GSA's SFTP endpoint.
-4. GSA S3 Put event on landing bucket triggers receiver workflow to validate manifest metadata, decompress payloads, and store data to the receiver target bucket.
+4. Receiver Agent polls the GSA landing S3 prefix on a 5-minute interval; on detecting a new transfer, it validates manifest metadata, decompresses the payload, and stores data to the receiver target bucket.
 5. Day 1 audit events are emitted with the correct `transfer_session_id`.
 6. Configuration supports dynamic sender and receiver agencies.
 7. S3 encryption at rest is enabled.
