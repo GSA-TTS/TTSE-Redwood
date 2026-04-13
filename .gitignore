@@ -34,3 +34,6 @@ SESSION*
 # Local env files
 .env
 .env.*
+
+# Local test files
+test-data/

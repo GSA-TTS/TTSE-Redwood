@@ -231,6 +231,16 @@ class TestSenderWorkflow:
             exit_code = _create_sender_workflow(config)
             assert exit_code == 0  # Still succeeds (idempotent)
 
+    def test_sender_workflow_no_files_does_not_emit_extract_data(self) -> None:
+        """Sender workflow should not emit extract_data when nothing is processed."""
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+
+        with patch("redwood_dataagent.agent._scan_sender_directory", return_value=[]):
+            with patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+                exit_code = _create_sender_workflow(config)
+                assert exit_code == 0
+                mock_extract.assert_not_called()
+
     def test_sender_workflow_emits_step_audit_events_on_success(self, tmp_path: Path) -> None:
         """Sender workflow emits detect, compress, manifest and stage-upload audit events."""
         config = self._make_config(sender_data_directory="s3://bucket/incoming/")
@@ -299,6 +309,7 @@ class TestSenderWorkflow:
                             if call.kwargs.get("outcome") == EventOutcome.FAILURE
                         ]
                         assert failure_calls
+                        assert failure_calls[0].kwargs.get("bytes_transferred") == 0
 
 
 class TestReceiverWorkflow:

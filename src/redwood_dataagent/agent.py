@@ -499,18 +499,6 @@ def _create_sender_workflow(config: AgentConfig) -> int:
         )
 
         if not files_to_process:
-            log_extract_data(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                outcome=EventOutcome.SUCCESS,
-                details={
-                    "step": "detect",
-                    "directory": config.sender_data_directory,
-                    "file_count": 0,
-                    "message": "No new files found",
-                },
-            )
             LOGGER.info(
                 "No new file read. Exiting sender workflow (idempotent).",
                 extra={"event": "sender_no_files", "directory": config.sender_data_directory},
@@ -738,6 +726,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                         sender_agency=config.sender_agency,
                         receiver_agency=config.receiver_agency,
                         destination_host=config.sender_staging_bucket,
+                        bytes_transferred=total_uploaded_bytes,
                         outcome=EventOutcome.FAILURE,
                         details={
                             "step": "stage_upload",
