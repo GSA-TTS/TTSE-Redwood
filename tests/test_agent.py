@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from redwood_dataagent.audit.events import EventOutcome
 from redwood_dataagent.agent import (
     _compute_checksum,
     _create_receiver_workflow,
@@ -230,6 +231,75 @@ class TestSenderWorkflow:
             exit_code = _create_sender_workflow(config)
             assert exit_code == 0  # Still succeeds (idempotent)
 
+    def test_sender_workflow_emits_step_audit_events_on_success(self, tmp_path: Path) -> None:
+        """Sender workflow emits detect, compress, manifest and stage-upload audit events."""
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1}]')
+
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                    with patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+                        with patch("redwood_dataagent.agent.log_compress") as mock_compress:
+                            with patch("redwood_dataagent.agent.log_manifest_created") as mock_manifest:
+                                with patch("redwood_dataagent.agent.log_sftp_transfer_start") as mock_stage_start:
+                                    with patch("redwood_dataagent.agent.log_sftp_transfer_complete") as mock_stage_complete:
+                                        mock_client = MagicMock()
+                                        mock_s3_class.return_value = mock_client
+
+                                        def mock_download(bucket, key, dest):
+                                            import shutil
+
+                                            shutil.copy2(test_file, dest)
+
+                                        mock_client.download_file.side_effect = mock_download
+                                        mock_scan.return_value = [
+                                            ("s3://bucket/incoming/records.json", "records.json")
+                                        ]
+
+                                        exit_code = _create_sender_workflow(config)
+                                        assert exit_code == 0
+                                        assert mock_extract.call_count >= 2
+                                        mock_compress.assert_called_once()
+                                        mock_manifest.assert_called_once()
+                                        mock_stage_start.assert_called_once()
+                                        mock_stage_complete.assert_called_once()
+
+    def test_sender_workflow_upload_failure_logs_failure_and_returns_error(self, tmp_path: Path) -> None:
+        """Sender workflow records stage-upload failure and exits non-zero."""
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1}]')
+
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                    with patch("redwood_dataagent.agent.log_sftp_transfer_complete") as mock_stage_complete:
+                        mock_client = MagicMock()
+                        mock_s3_class.return_value = mock_client
+
+                        def mock_download(bucket, key, dest):
+                            import shutil
+
+                            shutil.copy2(test_file, dest)
+
+                        mock_client.download_file.side_effect = mock_download
+                        mock_client.upload_file.side_effect = StorageError("staging upload failed")
+                        mock_scan.return_value = [
+                            ("s3://bucket/incoming/records.json", "records.json")
+                        ]
+
+                        exit_code = _create_sender_workflow(config)
+                        assert exit_code == 1
+
+                        failure_calls = [
+                            call
+                            for call in mock_stage_complete.call_args_list
+                            if call.kwargs.get("outcome") == EventOutcome.FAILURE
+                        ]
+                        assert failure_calls
+
 
 class TestReceiverWorkflow:
     """Tests for _create_receiver_workflow()."""
@@ -324,6 +394,21 @@ class TestScanSenderDirectory:
             assert len(result) == 1
             assert result[0][0].startswith("s3://")
             assert result[0][1] == "file1.json"
+
+    def test_scan_sender_directory_skips_processed_files_with_done_marker(self) -> None:
+        """Files with processed .done markers are skipped to avoid re-staging."""
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+            mock_client = MagicMock()
+            mock_s3_class.return_value = mock_client
+            mock_client._client.list_objects_v2.return_value = {
+                "Contents": [{"Key": "incoming/file1.json"}]
+            }
+            # Marker exists for file1.json
+            mock_client._client.head_object.return_value = {"ResponseMetadata": {}}
+
+            result = _scan_sender_directory("s3://bucket/incoming/", "us-east-1")
+
+            assert result == []
 
 
 class TestMarkFileProcessed:
