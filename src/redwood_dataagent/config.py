@@ -7,7 +7,12 @@ import uuid
 from dataclasses import dataclass
 
 from .exceptions import ConfigurationError
-from .storage.conventions import StoragePurpose, build_receiver_bucket, build_sender_bucket
+from .storage.conventions import (
+    SenderStoragePath,
+    StoragePurpose,
+    build_receiver_bucket,
+    build_sender_bucket,
+)
 
 
 VALID_AGENT_MODES = {"sender", "receiver"}
@@ -33,17 +38,7 @@ class AgentConfig:
     sender_staging_bucket: str
     receiver_landing_bucket: str
     receiver_target_bucket: str
-    sender_data_directory: str | None = None
-
-
-def _get_optional_path(env_var: str) -> str | None:
-    """Return a trimmed optional path value or None when unset/blank."""
-    value = os.getenv(env_var)
-    if value is None:
-        return None
-
-    normalized = value.strip()
-    return normalized or None
+    sender_data_directory: str
 
 
 def load_config() -> AgentConfig:
@@ -72,9 +67,6 @@ def load_config() -> AgentConfig:
         Python logging level string. Defaults to ``"INFO"``.
     TRANSFER_SESSION_ID
         Correlation ID for the current transfer run. Auto-generated when absent.
-    SENDER_DATA_DIRECTORY
-        S3 directory path for incoming sender files (e.g., s3://bucket/incoming/)
-        Scans this directory for files to process. Required for sender-mode runs.
 
     Returns
     -------
@@ -107,6 +99,13 @@ def load_config() -> AgentConfig:
     # Every run gets a correlation identifier even when the caller does not supply one.
     transfer_session_id = os.getenv("TRANSFER_SESSION_ID") or str(uuid.uuid4())
 
+    sender_staging_bucket = build_sender_bucket(
+        sender_agency, environment, StoragePurpose.STAGING
+    )
+    sender_data_directory = (
+        f"s3://{sender_staging_bucket}/{SenderStoragePath.incoming_prefix()}"
+    )
+
     return AgentConfig(
         agent_mode=agent_mode,
         tenant=os.getenv("TENANT", "tts"),
@@ -116,14 +115,12 @@ def load_config() -> AgentConfig:
         transfer_session_id=transfer_session_id,
         sender_agency=sender_agency,
         receiver_agency=receiver_agency,
-        sender_staging_bucket=build_sender_bucket(
-            sender_agency, environment, StoragePurpose.STAGING
-        ),
+        sender_staging_bucket=sender_staging_bucket,
         receiver_landing_bucket=build_receiver_bucket(
             receiver_agency, environment, "landing"
         ),
         receiver_target_bucket=build_receiver_bucket(
             receiver_agency, environment, "target"
         ),
-        sender_data_directory=_get_optional_path("SENDER_DATA_DIRECTORY"),
+        sender_data_directory=sender_data_directory,
     )

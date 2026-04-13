@@ -44,7 +44,7 @@ def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.aws_region == "us-east-1"
     assert config.log_level == "INFO"
     assert config.transfer_session_id  # auto-generated UUID is non-empty
-    assert config.sender_data_directory is None
+    assert config.sender_data_directory == "s3://tts-core-development-dot-data-staging/incoming/"
 
 
 def test_load_config_returns_agent_config_instance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,14 +289,31 @@ def test_load_config_log_level_normalised_to_uppercase(
     assert config.log_level == "DEBUG"
 
 
-def test_load_config_optional_file_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Optional file path settings are trimmed and stored when configured."""
+def test_load_config_sender_data_directory_ignores_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sender data directory is always derived from sender staging bucket."""
     _clear_all_env(monkeypatch)
-    monkeypatch.setenv("SENDER_DATA_DIRECTORY", " s3://bucket/incoming/ ")
+    monkeypatch.setenv("SENDER_DATA_DIRECTORY", "s3://bucket/incoming/")
+    monkeypatch.setenv("ENVIRONMENT", "dev")
 
     config = load_config()
 
-    assert config.sender_data_directory == "s3://bucket/incoming/"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/incoming/"
+
+
+def test_load_config_sender_data_directory_derived_from_sender_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sender data directory defaults to the derived sender staging incoming prefix."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("SENDER_AGENCY", "dot")
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+
+    config = load_config()
+
+    assert config.sender_staging_bucket == "tts-core-dev-dot-data-staging"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/incoming/"
 
 
 # ---------------------------------------------------------------------------
