@@ -1,7 +1,7 @@
 
 **Development schedule**
 
-*   Agent
+*   Adapter
     *   Event Management
         *   Broker connectivity
         *   Authentication & Security
