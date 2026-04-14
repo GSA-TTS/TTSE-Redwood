@@ -41,6 +41,8 @@ from .exceptions import (
 from .logging_utils import get_logger
 from .models.manifest import ChecksumAlgorithm, CompressionType, ManifestFile, TransferManifest
 from .policy import PolicyApprover
+from .receiver.landing import ReceiverLandingZone
+from .receiver.store import ReceiverTargetStore
 from .storage.conventions import SenderStoragePath
 
 # Create module logger (will auto-inject transfer_session_id from context)
@@ -851,6 +853,57 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             receiver_agency=config.receiver_agency,
         )
 
+        s3_client = S3Client(aws_region=config.aws_region)
+        landing_zone = ReceiverLandingZone(
+            s3_client=s3_client,
+            landing_bucket=config.receiver_landing_bucket,
+            environment=config.environment,
+        )
+        target_store = ReceiverTargetStore(
+            s3_client=s3_client,
+            target_bucket=config.receiver_target_bucket,
+            environment=config.environment,
+        )
+
+        # 2. Fetch artifacts from receiver landing bucket.
+        archive_bytes, manifest_dict = _retry_operation(
+            "landing_fetch",
+            lambda: landing_zone.fetch_from_landing_bucket(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+            ),
+        )
+
+        # 3. Validate manifest and checksum.
+        manifest = _retry_operation(
+            "manifest_validate",
+            lambda: landing_zone.validate_manifest(
+                manifest_dict=manifest_dict,
+                archive_bytes=archive_bytes,
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+            ),
+        )
+
+        # Guardrail: ensure manifest identity matches configured transfer context.
+        if manifest.transfer_session_id != config.transfer_session_id:
+            raise StorageError(
+                "Manifest transfer_session_id mismatch: "
+                f"expected {config.transfer_session_id}, got {manifest.transfer_session_id}"
+            )
+        if manifest.sender_agency != config.sender_agency:
+            raise StorageError(
+                "Manifest sender_agency mismatch: "
+                f"expected {config.sender_agency}, got {manifest.sender_agency}"
+            )
+        if manifest.receiver_agency != config.receiver_agency:
+            raise StorageError(
+                "Manifest receiver_agency mismatch: "
+                f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
+            )
+
         log_validate_manifest(
             transfer_session_id=config.transfer_session_id,
             sender_agency=config.sender_agency,
@@ -858,21 +911,46 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             outcome=EventOutcome.SUCCESS,
             details={
                 "manifest_source": "landing_storage",
-                "status": "pending_storage_integration",
+                "manifest_file_count": manifest.total_file_count,
+                "transfer_session_id": manifest.transfer_session_id,
             },
         )
 
-        # 3. Decompress and store (placeholder for Day 1 MVP)
-        log_decompress(
-            transfer_session_id=config.transfer_session_id,
-            sender_agency=config.sender_agency,
-            receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.SUCCESS,
-            details={
-                "step": "decompress",
-                "files_processed": 0,
-            },
-        )
+        # 4. Decompress to temporary working directory.
+        with tempfile.TemporaryDirectory(prefix="redwood-receiver-") as tmpdir:
+            extraction_metadata = _retry_operation(
+                "decompress",
+                lambda: landing_zone.decompress_archive(
+                    archive_bytes=archive_bytes,
+                    target_directory=Path(tmpdir),
+                    transfer_session_id=config.transfer_session_id,
+                    sender_agency=config.sender_agency,
+                    receiver_agency=config.receiver_agency,
+                ),
+            )
+
+            log_decompress(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                outcome=EventOutcome.SUCCESS,
+                details={
+                    "step": "decompress",
+                    "files_processed": extraction_metadata.get("file_count", 0),
+                    "total_bytes": extraction_metadata.get("total_bytes", 0),
+                },
+            )
+
+            # 5. Store extracted data to receiver target bucket.
+            store_result = _retry_operation(
+                "store_to_target",
+                lambda: target_store.store_to_target(
+                    extracted_files_dir=Path(tmpdir),
+                    transfer_session_id=config.transfer_session_id,
+                    sender_agency=config.sender_agency,
+                    receiver_agency=config.receiver_agency,
+                ),
+            )
 
         log_store_data(
             transfer_session_id=config.transfer_session_id,
@@ -882,7 +960,9 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             details={
                 "step": "store",
                 "destination_bucket": config.receiver_target_bucket,
-                "status": "pending_storage_integration",
+                "status": store_result.get("status"),
+                "file_count": store_result.get("file_count", 0),
+                "target_location": store_result.get("target_location"),
             },
         )
 
