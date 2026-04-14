@@ -712,7 +712,10 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 details={"step": "stage_upload", "artifact_count": 2},
             )
             for artifact_path in (archive_path, manifest_path):
-                staging_key = SenderStoragePath.transfers(config.transfer_session_id, artifact_path.name)
+                staging_key = SenderStoragePath.transfers(
+                    config.transfer_session_id,
+                    artifact_path.name,
+                )
                 try:
                     _retry_operation(
                         "stage_upload",
@@ -782,8 +785,14 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                     "session_id": config.transfer_session_id,
                     "manifest": manifest.model_dump(),
                     "staged_artifacts": [
-                        SenderStoragePath.transfers(config.transfer_session_id, archive_path.name),
-                        SenderStoragePath.transfers(config.transfer_session_id, manifest_path.name),
+                        SenderStoragePath.transfers(
+                            config.transfer_session_id,
+                            archive_path.name,
+                        ),
+                        SenderStoragePath.transfers(
+                            config.transfer_session_id,
+                            manifest_path.name,
+                        ),
                     ],
                 },
             )
