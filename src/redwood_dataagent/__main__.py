@@ -23,13 +23,13 @@ def main() -> int:
         # Print to stdout/stderr directly before logging is configured
         print("Starting Redwood Data Agent...", file=sys.stdout, flush=True)
         
-        # Load configuration from environment variables + defaults
-        # Do this before configuring logging so we know the log level
-        config = load_config()
+        # Load initial configuration from environment variables + defaults to get log level
+        # This config is used only for initial logging setup; each transfer gets its own
+        initial_config = load_config()
 
         # Configure JSON logging with the specified log level
         # NOW logging is ready for all subsequent logs
-        configure_logging(config.log_level)
+        configure_logging(initial_config.log_level)
 
         # Get logger after logging is configured
         logger = get_logger("redwood_dataagent")
@@ -38,14 +38,10 @@ def main() -> int:
             "Redwood Data Agent initializing",
             extra={
                 "event": "agent_start",
-                "agent_mode": config.agent_mode,
-                "environment": config.environment,
+                "agent_mode": initial_config.agent_mode,
+                "environment": initial_config.environment,
             },
         )
-
-        # Inject transfer session ID into logging context (all logs will auto-include this)
-        # This enables correlation of all logs for this transfer across the entire pipeline
-        set_transfer_session_id(config.transfer_session_id)
 
         # Run agent on 5-minute scheduler loop for long-running stateless deployment
         logger.info(
@@ -65,6 +61,14 @@ def main() -> int:
         
         try:
             while True:
+                # Load fresh config for each transfer to get a new transfer_session_id
+                # (unless TRANSFER_SESSION_ID is explicitly set in environment)
+                config = load_config()
+
+                # Inject transfer session ID into logging context (all logs will auto-include this)
+                # This enables correlation of all logs for this transfer across the entire pipeline
+                set_transfer_session_id(config.transfer_session_id)
+
                 # Execute agent with fully configured context
                 logger.info(
                     "Executing agent workflow",
