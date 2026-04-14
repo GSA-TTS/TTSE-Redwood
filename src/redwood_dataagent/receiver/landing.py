@@ -20,6 +20,7 @@ from redwood_dataagent.audit.events import AuditEventType, EventOutcome
 from redwood_dataagent.audit.logger import log_event
 from redwood_dataagent.exceptions import ManifestValidationError, StorageError
 from redwood_dataagent.models.manifest import TransferManifest
+from redwood_dataagent.storage.conventions import ReceiverStoragePath
 from redwood_dataagent.aws.s3 import S3Client
 
 _logger = logging.getLogger(__name__)
@@ -91,10 +92,17 @@ class ReceiverLandingZone:
                 },
             )
 
-            # Construct S3 paths
-            landing_prefix = f"transfers/{transfer_session_id}"
-            manifest_key = f"{landing_prefix}/manifest.json"
-            archive_key = f"{landing_prefix}/transfer.tar.gz"
+            # Construct S3 paths scoped by sender agency prefix.
+            manifest_key = ReceiverStoragePath.landing(
+                transfer_session_id,
+                "manifest.json",
+                sender_agency,
+            )
+            archive_key = ReceiverStoragePath.landing(
+                transfer_session_id,
+                "transfer.tar.gz",
+                sender_agency,
+            )
 
             # Download manifest first to validate before downloading large archive
             manifest_bytes = self._download_from_s3(manifest_key, "manifest.json")

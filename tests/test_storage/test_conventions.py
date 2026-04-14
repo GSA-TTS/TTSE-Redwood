@@ -204,6 +204,16 @@ class TestReceiverStoragePath:
             path = ReceiverStoragePath.landing(session_id, filename)
             assert path == f"landing/{session_id}/{filename}"
 
+    def test_landing_path_with_sender_agency_prefix(self):
+        """Verify agency-scoped landing path format."""
+        path = ReceiverStoragePath.landing("transfer-001", "data.tar.gz", "dot")
+        assert path == "dot/transfers/transfer-001/data.tar.gz"
+
+    def test_landing_blank_sender_agency_raises(self):
+        """Verify blank sender_agency in landing raises ValueError."""
+        with pytest.raises(ValueError, match="path component cannot be blank"):
+            ReceiverStoragePath.landing("transfer-001", "data.tar.gz", "   ")
+
     def test_extracted_with_different_filenames(self):
         """Verify extracted path with various file names."""
         test_cases = [
@@ -285,9 +295,11 @@ class TestStorageConventionsIntegration:
 
         session_id = "transfer-20260324-001"
         inbound_path = ReceiverStoragePath.landing(session_id, "data.tar.gz")
+        inbound_path_agency = ReceiverStoragePath.landing(session_id, "data.tar.gz", "dot")
         extracted_path = ReceiverStoragePath.extracted(session_id, "records.csv")
 
         assert inbound_path == "landing/transfer-20260324-001/data.tar.gz"
+        assert inbound_path_agency == "dot/transfers/transfer-20260324-001/data.tar.gz"
         assert extracted_path == "extracted/transfer-20260324-001/records.csv"
 
     def test_multi_agency_isolation(self):

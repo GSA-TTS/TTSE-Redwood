@@ -16,6 +16,7 @@ Supported purposes:
 Path patterns:
 - Sender incoming: incoming/
 - Sender transfers: transfers/{transfer_session_id}/{file_name}
+- Receiver landing: {sender_agency}/transfers/{transfer_session_id}/{file_name}
 - Receiver extracted: extracted/{transfer_session_id}/{file_name}
 """
 
@@ -86,7 +87,7 @@ class SenderStoragePath(BaseModel):
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         if not file_name or not file_name.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
-        
+
         return f"transfers/{transfer_session_id.strip()}/{file_name.strip()}"
 
 
@@ -107,11 +108,16 @@ class ReceiverStoragePath(BaseModel):
         return value
 
     @staticmethod
-    def landing(transfer_session_id: str, file_name: str) -> str:
+    def landing(
+        transfer_session_id: str,
+        file_name: str,
+        sender_agency: str | None = None,
+    ) -> str:
         """
         Build a landing zone path on receiver storage.
 
-        Pattern: landing/{transfer_session_id}/{file_name}
+        Pattern (legacy): landing/{transfer_session_id}/{file_name}
+        Pattern (agency-scoped): {sender_agency}/transfers/{transfer_session_id}/{file_name}
 
         Receiver-side landing is the inbound zone where SFTP transfers arrive before
         validation and extraction.
@@ -119,6 +125,7 @@ class ReceiverStoragePath(BaseModel):
         Args:
             transfer_session_id: Correlation ID for the transfer
             file_name: Name of the received artifact
+            sender_agency: Optional sender agency prefix (e.g., "dot")
 
         Returns:
             Path string for the artifact on receiver landing storage
@@ -134,8 +141,18 @@ class ReceiverStoragePath(BaseModel):
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         if not file_name or not file_name.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
+
+        if sender_agency is not None and not sender_agency.strip():
+            raise ValueError(_BLANK_PATH_COMPONENT_MSG)
+
+        transfer_session_id = transfer_session_id.strip()
+        file_name = file_name.strip()
+
+        if sender_agency is not None:
+            sender_agency = sender_agency.strip()
+            return f"{sender_agency}/transfers/{transfer_session_id}/{file_name}"
         
-        return f"landing/{transfer_session_id.strip()}/{file_name.strip()}"
+        return f"landing/{transfer_session_id}/{file_name}"
 
     @staticmethod
     def extracted(transfer_session_id: str, file_name: str) -> str:
