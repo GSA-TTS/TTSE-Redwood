@@ -230,6 +230,76 @@ class TestReceiverLandingZoneDecompress:
         assert "sample.txt" in metadata["extracted_files"]
         assert (extract_dir / "sample.txt").exists()
 
+
+class TestReceiverLandingZoneDiscovery:
+    """Tests for list_sender_agencies() and list_pending_transfers() methods."""
+
+    def test_list_sender_agencies_returns_all_folders(self, receiver_landing_zone):
+        """Returns all top-level agency folder names from the landing bucket."""
+        receiver_landing_zone.s3_client._client.list_objects_v2.return_value = {
+            "CommonPrefixes": [
+                {"Prefix": "dot/"},
+                {"Prefix": "hud/"},
+                {"Prefix": "faa/"},
+            ]
+        }
+
+        agencies = receiver_landing_zone.list_sender_agencies()
+
+        assert agencies == ["dot", "hud", "faa"]
+        receiver_landing_zone.s3_client._client.list_objects_v2.assert_called_once_with(
+            Bucket="gsa-data-dev-landing",
+            Delimiter="/",
+        )
+
+    def test_list_sender_agencies_empty_bucket(self, receiver_landing_zone):
+        """Returns empty list when no sender folders exist yet."""
+        receiver_landing_zone.s3_client._client.list_objects_v2.return_value = {}
+
+        agencies = receiver_landing_zone.list_sender_agencies()
+
+        assert agencies == []
+
+    def test_list_sender_agencies_s3_failure_raises_storage_error(self, receiver_landing_zone):
+        """Wraps S3 errors in StorageError."""
+        receiver_landing_zone.s3_client._client.list_objects_v2.side_effect = Exception("Access Denied")
+
+        with pytest.raises(StorageError, match="Failed to list sender agencies"):
+            receiver_landing_zone.list_sender_agencies()
+
+    def test_list_pending_transfers_returns_session_ids(self, receiver_landing_zone):
+        """Returns transfer session IDs from the sender's transfers/ subfolder."""
+        receiver_landing_zone.s3_client._client.list_objects_v2.return_value = {
+            "CommonPrefixes": [
+                {"Prefix": "dot/transfers/sess-001/"},
+                {"Prefix": "dot/transfers/sess-002/"},
+            ]
+        }
+
+        sessions = receiver_landing_zone.list_pending_transfers("dot")
+
+        assert sessions == ["sess-001", "sess-002"]
+        receiver_landing_zone.s3_client._client.list_objects_v2.assert_called_once_with(
+            Bucket="gsa-data-dev-landing",
+            Delimiter="/",
+            Prefix="dot/transfers/",
+        )
+
+    def test_list_pending_transfers_no_sessions(self, receiver_landing_zone):
+        """Returns empty list when sender has no transfer sessions."""
+        receiver_landing_zone.s3_client._client.list_objects_v2.return_value = {}
+
+        sessions = receiver_landing_zone.list_pending_transfers("dot")
+
+        assert sessions == []
+
+    def test_list_pending_transfers_s3_failure_raises_storage_error(self, receiver_landing_zone):
+        """Wraps S3 errors in StorageError."""
+        receiver_landing_zone.s3_client._client.list_objects_v2.side_effect = Exception("Timeout")
+
+        with pytest.raises(StorageError, match="Failed to list pending transfers"):
+            receiver_landing_zone.list_pending_transfers("dot")
+
     def test_decompress_creates_target_directory(self, receiver_landing_zone, sample_archive, tmp_path):
         """Test decompression creates target directory if it doesn't exist."""
         extract_dir = tmp_path / "nonexistent" / "extract"

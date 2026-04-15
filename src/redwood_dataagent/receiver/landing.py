@@ -57,6 +57,68 @@ class ReceiverLandingZone:
         self.landing_bucket = landing_bucket
         self.environment = environment
 
+    def list_sender_agencies(self) -> list[str]:
+        """List all sender agency folders currently present in the landing bucket.
+
+        Scans top-level S3 common prefixes to discover which sender agencies
+        have delivered files.
+
+        Returns:
+            List of sender agency codes (e.g., ["dot", "hud", "faa"])
+
+        Raises:
+            StorageError: If the S3 listing fails
+        """
+        try:
+            response = self.s3_client._client.list_objects_v2(
+                Bucket=self.landing_bucket,
+                Delimiter="/",
+            )
+            prefixes = response.get("CommonPrefixes", [])
+            agencies = [p["Prefix"].rstrip("/") for p in prefixes]
+            _logger.info(
+                f"Found {len(agencies)} sender agency folder(s) in landing bucket: {agencies}"
+            )
+            return agencies
+        except Exception as e:
+            raise StorageError(
+                f"Failed to list sender agencies in {self.landing_bucket}: {e}"
+            ) from e
+
+    def list_pending_transfers(self, sender_agency: str) -> list[str]:
+        """List transfer session IDs under a sender agency folder.
+
+        Scans ``{sender_agency}/transfers/`` for session sub-folders.
+        The target-store idempotency marker prevents re-processing already-stored sessions.
+
+        Args:
+            sender_agency: Sender agency code (e.g., "dot")
+
+        Returns:
+            List of transfer session IDs (e.g., ["sess-001", "sess-002"])
+
+        Raises:
+            StorageError: If the S3 listing fails
+        """
+        try:
+            prefix = f"{sender_agency}/transfers/"
+            response = self.s3_client._client.list_objects_v2(
+                Bucket=self.landing_bucket,
+                Delimiter="/",
+                Prefix=prefix,
+            )
+            prefixes = response.get("CommonPrefixes", [])
+            # "dot/transfers/sess-001/" → "sess-001"
+            sessions = [p["Prefix"].rstrip("/").split("/")[-1] for p in prefixes]
+            _logger.info(
+                f"Found {len(sessions)} transfer session(s) for sender {sender_agency}: {sessions}"
+            )
+            return sessions
+        except Exception as e:
+            raise StorageError(
+                f"Failed to list pending transfers for sender {sender_agency}: {e}"
+            ) from e
+
     def fetch_from_landing_bucket(
         self,
         transfer_session_id: str,

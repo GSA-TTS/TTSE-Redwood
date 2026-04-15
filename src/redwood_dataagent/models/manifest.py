@@ -93,7 +93,7 @@ class TransferManifest(BaseModel):
     )
     sender_agency: str = Field(..., min_length=1, description="Sender agency code")
     receiver_agency: str = Field(
-        ..., min_length=1, description="Receiver agency code"
+        default="", description="Receiver agency code"
     )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -125,7 +125,6 @@ class TransferManifest(BaseModel):
     @field_validator(
         "transfer_session_id",
         "sender_agency",
-        "receiver_agency",
         "manifest_version",
     )
     @classmethod

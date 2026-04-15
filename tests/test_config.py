@@ -14,8 +14,7 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Remove every env var that load_config() reads so tests start from a clean slate."""
     for var in (
         "AGENT_MODE",
-        "SENDER_AGENCY",
-        "RECEIVER_AGENCY",
+        "AGENCY",
         "TRANSFER_SESSION_ID",
         "TENANT",
         "ENVIRONMENT",
@@ -31,31 +30,43 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """All defaults are applied correctly when no env vars are set."""
+    """Non-agency defaults are applied correctly; AGENCY must be explicitly set."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "receiver")
+    monkeypatch.setenv("AGENCY", "gsa")
 
     config = load_config()
 
     assert config.agent_mode == "receiver"
-    assert config.sender_agency == "dot"
+    assert config.sender_agency == ""  # not applicable in receiver mode
     assert config.receiver_agency == "gsa"
     assert config.tenant == "tts"
     assert config.environment == "development"
     assert config.aws_region == "us-east-1"
     assert config.log_level == "INFO"
     assert config.transfer_session_id  # auto-generated UUID is non-empty
-    assert config.sender_data_directory == "s3://tts-core-development-dot-data-staging/incoming/"
+    assert config.sender_data_directory == ""  # not applicable in receiver mode
+
+
+def test_load_config_missing_agency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AGENCY is strictly required — omitting it raises ConfigurationError."""
+    _clear_all_env(monkeypatch)
+
+    with pytest.raises(ConfigurationError, match="AGENCY"):
+        load_config()
 
 
 def test_load_config_returns_agent_config_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_config() always returns an AgentConfig dataclass."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
     assert isinstance(load_config(), AgentConfig)
 
 
 def test_load_config_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
     """AgentConfig is frozen – direct attribute assignment raises FrozenInstanceError."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
     config = load_config()
 
     with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
@@ -70,6 +81,7 @@ def test_load_config_agent_mode_sender(monkeypatch: pytest.MonkeyPatch) -> None:
     """AGENT_MODE=sender is accepted and stored in lowercase."""
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
 
     config = load_config()
 
@@ -80,6 +92,7 @@ def test_load_config_agent_mode_case_insensitive(monkeypatch: pytest.MonkeyPatch
     """AGENT_MODE value is normalised to lowercase before validation."""
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "SENDER")
+    monkeypatch.setenv("AGENCY", "dot")
 
     config = load_config()
 
@@ -98,47 +111,49 @@ def test_load_config_invalid_agent_mode(monkeypatch: pytest.MonkeyPatch) -> None
 # Agency names
 # ---------------------------------------------------------------------------
 
-def test_load_config_explicit_agencies(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Custom SENDER_AGENCY and RECEIVER_AGENCY are read from the environment."""
+def test_load_config_agency_sender_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AGENCY is mapped to sender_agency when AGENT_MODE=sender."""
     _clear_all_env(monkeypatch)
-    monkeypatch.setenv("SENDER_AGENCY", "faa")
-    monkeypatch.setenv("RECEIVER_AGENCY", "dot")
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "faa")
 
     config = load_config()
 
     assert config.sender_agency == "faa"
-    assert config.receiver_agency == "dot"
+    assert config.receiver_agency == ""  # not applicable in sender mode
+
+
+def test_load_config_agency_receiver_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AGENCY is mapped to receiver_agency when AGENT_MODE=receiver."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "receiver")
+    monkeypatch.setenv("AGENCY", "hud")
+
+    config = load_config()
+
+    assert config.receiver_agency == "hud"
+    assert config.sender_agency == ""  # not applicable in receiver mode
 
 
 def test_load_config_agency_names_normalised_to_lowercase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Agency names are stored in lowercase regardless of input case."""
+    """AGENCY value is stored in lowercase regardless of input case."""
     _clear_all_env(monkeypatch)
-    monkeypatch.setenv("SENDER_AGENCY", "DOT")
-    monkeypatch.setenv("RECEIVER_AGENCY", "GSA")
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "DOT")
 
     config = load_config()
 
     assert config.sender_agency == "dot"
-    assert config.receiver_agency == "gsa"
 
 
-def test_load_config_blank_sender_agency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A blank SENDER_AGENCY value raises ConfigurationError."""
+def test_load_config_blank_agency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blank AGENCY value raises ConfigurationError."""
     _clear_all_env(monkeypatch)
-    monkeypatch.setenv("SENDER_AGENCY", "   ")
+    monkeypatch.setenv("AGENCY", "   ")
 
-    with pytest.raises(ConfigurationError, match="SENDER_AGENCY"):
-        load_config()
-
-
-def test_load_config_blank_receiver_agency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A blank RECEIVER_AGENCY value raises ConfigurationError."""
-    _clear_all_env(monkeypatch)
-    monkeypatch.setenv("RECEIVER_AGENCY", "   ")
-
-    with pytest.raises(ConfigurationError, match="RECEIVER_AGENCY"):
+    with pytest.raises(ConfigurationError, match="AGENCY"):
         load_config()
 
 
@@ -149,6 +164,7 @@ def test_load_config_blank_receiver_agency_raises(monkeypatch: pytest.MonkeyPatc
 def test_load_config_blank_environment_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A blank ENVIRONMENT value raises ConfigurationError."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
     monkeypatch.setenv("ENVIRONMENT", "   ")
 
     with pytest.raises(ConfigurationError, match="ENVIRONMENT"):
@@ -162,6 +178,8 @@ def test_load_config_blank_environment_raises(monkeypatch: pytest.MonkeyPatch) -
 def test_load_config_sender_staging_bucket_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default DOT sender staging bucket follows the naming convention."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
 
     config = load_config()
 
@@ -169,8 +187,9 @@ def test_load_config_sender_staging_bucket_defaults(monkeypatch: pytest.MonkeyPa
 
 
 def test_load_config_receiver_landing_bucket_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default GSA receiver landing bucket follows the naming convention."""
+    """GSA receiver landing bucket follows the naming convention."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
 
     config = load_config()
 
@@ -178,48 +197,77 @@ def test_load_config_receiver_landing_bucket_defaults(monkeypatch: pytest.Monkey
 
 
 def test_load_config_receiver_target_bucket_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default GSA receiver target bucket follows the naming convention."""
+    """GSA receiver target bucket follows the naming convention."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
 
     config = load_config()
 
     assert config.receiver_target_bucket == "tts-core-development-gsa-data-target"
 
 
-def test_load_config_buckets_reflect_custom_agencies(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bucket names are derived from the configured agency codes."""
+def test_load_config_sender_bucket_reflects_custom_agency(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sender staging bucket is derived from AGENCY in sender mode."""
     _clear_all_env(monkeypatch)
-    monkeypatch.setenv("SENDER_AGENCY", "faa")
-    monkeypatch.setenv("RECEIVER_AGENCY", "dot")
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "faa")
     monkeypatch.setenv("ENVIRONMENT", "prod")
 
     config = load_config()
 
     assert config.sender_staging_bucket == "tts-core-prod-faa-data-staging"
-    assert config.receiver_landing_bucket == "tts-core-prod-dot-data-landing"
-    assert config.receiver_target_bucket == "tts-core-prod-dot-data-target"
+    assert config.receiver_landing_bucket == ""
+    assert config.receiver_target_bucket == ""
 
 
-def test_load_config_environment_propagates_to_all_buckets(
+def test_load_config_receiver_buckets_reflect_custom_agency(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Receiver buckets are derived from AGENCY in receiver mode."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "receiver")
+    monkeypatch.setenv("AGENCY", "hud")
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+
+    config = load_config()
+
+    assert config.sender_staging_bucket == ""
+    assert config.receiver_landing_bucket == "tts-core-prod-hud-data-landing"
+    assert config.receiver_target_bucket == "tts-core-prod-hud-data-target"
+
+
+def test_load_config_environment_propagates_to_sender_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Changing ENVIRONMENT is reflected in all three derived bucket names."""
+    """Changing ENVIRONMENT is reflected in the sender staging bucket name."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("ENVIRONMENT", "staging")
 
     config = load_config()
 
     assert "staging" in config.sender_staging_bucket
+
+
+def test_load_config_environment_propagates_to_receiver_buckets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Changing ENVIRONMENT is reflected in the receiver bucket names."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "receiver")
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+
+    config = load_config()
+
     assert "staging" in config.receiver_landing_bucket
     assert "staging" in config.receiver_target_bucket
 
 
-def test_load_config_day1_dot_to_gsa_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Full Day 1 MVP scenario: DOT sender → GSA receiver in dev environment."""
+def test_load_config_day1_dot_sender_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Day 1 MVP DOT sender pod: AGENCY=dot, AGENT_MODE=sender."""
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "sender")
-    monkeypatch.setenv("SENDER_AGENCY", "dot")
-    monkeypatch.setenv("RECEIVER_AGENCY", "gsa")
+    monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("ENVIRONMENT", "dev")
     monkeypatch.setenv("TRANSFER_SESSION_ID", "transfer-20260327-001")
 
@@ -227,12 +275,31 @@ def test_load_config_day1_dot_to_gsa_scenario(monkeypatch: pytest.MonkeyPatch) -
 
     assert config.agent_mode == "sender"
     assert config.sender_agency == "dot"
-    assert config.receiver_agency == "gsa"
+    assert config.receiver_agency == ""
     assert config.environment == "dev"
     assert config.transfer_session_id == "transfer-20260327-001"
     assert config.sender_staging_bucket == "tts-core-dev-dot-data-staging"
+    assert config.receiver_landing_bucket == ""
+    assert config.receiver_target_bucket == ""
+
+
+def test_load_config_day1_gsa_receiver_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Day 1 MVP GSA receiver pod: AGENCY=gsa, AGENT_MODE=receiver."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "receiver")
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TRANSFER_SESSION_ID", "transfer-20260327-001")
+
+    config = load_config()
+
+    assert config.agent_mode == "receiver"
+    assert config.receiver_agency == "gsa"
+    assert config.sender_agency == ""
+    assert config.environment == "dev"
     assert config.receiver_landing_bucket == "tts-core-dev-gsa-data-landing"
     assert config.receiver_target_bucket == "tts-core-dev-gsa-data-target"
+    assert config.sender_staging_bucket == ""
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +311,7 @@ def test_load_config_generates_transfer_session_id_when_absent(
 ) -> None:
     """A UUID is auto-generated when TRANSFER_SESSION_ID is not set."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
 
     config = load_config()
 
@@ -256,6 +324,7 @@ def test_load_config_uses_provided_transfer_session_id(
 ) -> None:
     """A caller-supplied TRANSFER_SESSION_ID is preserved verbatim."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
     monkeypatch.setenv("TRANSFER_SESSION_ID", "transfer-20260327-001")
 
     config = load_config()
@@ -266,6 +335,7 @@ def test_load_config_uses_provided_transfer_session_id(
 def test_load_config_unique_session_ids_generated(monkeypatch: pytest.MonkeyPatch) -> None:
     """Each call without a supplied ID generates a unique transfer_session_id."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
 
     config_a = load_config()
     config_b = load_config()
@@ -282,6 +352,7 @@ def test_load_config_log_level_normalised_to_uppercase(
 ) -> None:
     """LOG_LEVEL is stored in uppercase regardless of input case."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
     monkeypatch.setenv("LOG_LEVEL", "debug")
 
     config = load_config()
@@ -294,6 +365,8 @@ def test_load_config_sender_data_directory_ignores_env_override(
 ) -> None:
     """Sender data directory is always derived from sender staging bucket."""
     _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("SENDER_DATA_DIRECTORY", "s3://bucket/incoming/")
     monkeypatch.setenv("ENVIRONMENT", "dev")
 
@@ -307,7 +380,8 @@ def test_load_config_sender_data_directory_derived_from_sender_bucket(
 ) -> None:
     """Sender data directory defaults to the derived sender staging incoming prefix."""
     _clear_all_env(monkeypatch)
-    monkeypatch.setenv("SENDER_AGENCY", "dot")
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("ENVIRONMENT", "dev")
 
     config = load_config()
