@@ -324,18 +324,65 @@ class TestReceiverWorkflow:
             "aws_region": "us-east-1",
             "log_level": "INFO",
             "transfer_session_id": "session-456",
-            "sender_agency": "dot",
+            "sender_agency": "",
             "receiver_agency": "gsa",
-            "sender_staging_bucket": "tts-core-development-dot-data-staging",
+            "sender_staging_bucket": "",
             "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
-            "sender_data_directory": None,
+            "sender_data_directory": "",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
 
+    def _setup_mock_landing(self, mock_landing: MagicMock, session_id: str = "session-456", sender: str = "dot", receiver: str = "gsa") -> None:
+        """Wire standard mocks for a successful single-transfer receive."""
+        mock_landing.list_sender_agencies.return_value = [sender]
+        mock_landing.list_pending_transfers.return_value = [session_id]
+        mock_manifest = MagicMock()
+        mock_manifest.transfer_session_id = session_id
+        mock_manifest.sender_agency = sender
+        mock_manifest.receiver_agency = receiver
+        mock_manifest.total_file_count = 1
+        mock_landing.fetch_from_landing_bucket.return_value = (b"archive-bytes", {})
+        mock_landing.validate_manifest.return_value = mock_manifest
+        mock_landing.decompress_archive.return_value = {"file_count": 1, "total_bytes": 42}
+
     def test_receiver_workflow_success(self) -> None:
-        """Receiver workflow completes successfully."""
+        """Receiver discovers sender folder and processes transfer successfully."""
+        config = self._make_config()
+
+        with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+            with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                mock_landing = MagicMock()
+                mock_store = MagicMock()
+                mock_landing_cls.return_value = mock_landing
+                mock_store_cls.return_value = mock_store
+                self._setup_mock_landing(mock_landing)
+                mock_store.store_to_target.return_value = {
+                    "status": "stored", "file_count": 1,
+                    "target_location": "s3://target/transfers/session-456/",
+                }
+
+                assert _create_receiver_workflow(config) == 0
+                mock_landing.list_sender_agencies.assert_called_once()
+                mock_landing.list_pending_transfers.assert_called_once_with("dot")
+                mock_landing.fetch_from_landing_bucket.assert_called_once()
+
+    def test_receiver_workflow_no_senders_returns_success(self) -> None:
+        """Receiver returns 0 when landing bucket has no sender folders yet."""
+        config = self._make_config()
+
+        with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+            with patch("redwood_dataagent.agent.ReceiverTargetStore"):
+                mock_landing = MagicMock()
+                mock_landing_cls.return_value = mock_landing
+                mock_landing.list_sender_agencies.return_value = []
+
+                assert _create_receiver_workflow(config) == 0
+                mock_landing.list_pending_transfers.assert_not_called()
+
+    def test_receiver_workflow_polls_multiple_senders(self) -> None:
+        """Receiver processes transfers from all discovered sender agency folders."""
         config = self._make_config()
 
         with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
@@ -345,130 +392,58 @@ class TestReceiverWorkflow:
                 mock_landing_cls.return_value = mock_landing
                 mock_store_cls.return_value = mock_store
 
-                mock_landing.fetch_from_landing_bucket.return_value = (b"archive-bytes", {
-                    "manifest_version": "1.0",
-                    "transfer_session_id": config.transfer_session_id,
-                    "sender_agency": config.sender_agency,
-                    "receiver_agency": config.receiver_agency,
-                    "created_at": "2026-04-06T10:00:00Z",
-                    "checksum_algorithm": "sha256",
-                    "total_file_count": 1,
-                    "compression_type": "gzip",
-                    "transfer_date": "2026-04-06",
-                    "files": [{
-                        "file_name": "transfer.tar.gz",
-                        "file_size_bytes": 10,
-                        "checksum_sha256": "a" * 64,
-                    }],
-                })
-                mock_manifest = MagicMock()
-                mock_manifest.transfer_session_id = config.transfer_session_id
-                mock_manifest.sender_agency = config.sender_agency
-                mock_manifest.receiver_agency = config.receiver_agency
-                mock_manifest.total_file_count = 1
-                mock_landing.validate_manifest.return_value = mock_manifest
-                mock_landing.decompress_archive.return_value = {
-                    "file_count": 1,
-                    "total_bytes": 42,
-                }
-                mock_store.store_to_target.return_value = {
-                    "status": "stored",
-                    "file_count": 1,
-                    "target_location": "s3://target/transfers/session-456/",
-                }
+                mock_landing.list_sender_agencies.return_value = ["dot", "hud"]
+                mock_landing.list_pending_transfers.side_effect = lambda sa: [f"{sa}-sess-001"]
 
-                exit_code = _create_receiver_workflow(config)
-                assert exit_code == 0
+                def make_manifest(sa: str) -> MagicMock:
+                    m = MagicMock()
+                    m.transfer_session_id = f"{sa}-sess-001"
+                    m.receiver_agency = config.receiver_agency
+                    m.total_file_count = 1
+                    return m
 
-    def test_receiver_workflow_logs_events(self) -> None:
-        """Receiver workflow logs audit events."""
-        config = self._make_config()
+                mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
+                mock_landing.validate_manifest.side_effect = lambda **kw: make_manifest(kw["sender_agency"])
+                mock_landing.decompress_archive.return_value = {"file_count": 1, "total_bytes": 10}
+                mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
 
-        with patch("redwood_dataagent.agent.log_pipeline_start") as mock_start:
-            with patch("redwood_dataagent.agent.log_pipeline_complete"):
-                with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
-                    with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
-                        mock_landing = MagicMock()
-                        mock_store = MagicMock()
-                        mock_landing_cls.return_value = mock_landing
-                        mock_store_cls.return_value = mock_store
+                assert _create_receiver_workflow(config) == 0
+                assert mock_landing.list_pending_transfers.call_count == 2
+                assert mock_landing.fetch_from_landing_bucket.call_count == 2
 
-                        mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
-                        mock_manifest = MagicMock()
-                        mock_manifest.transfer_session_id = config.transfer_session_id
-                        mock_manifest.sender_agency = config.sender_agency
-                        mock_manifest.receiver_agency = config.receiver_agency
-                        mock_manifest.total_file_count = 1
-                        mock_landing.validate_manifest.return_value = mock_manifest
-                        mock_landing.decompress_archive.return_value = {"file_count": 0, "total_bytes": 0}
-                        mock_store.store_to_target.return_value = {"status": "stored", "file_count": 0, "target_location": "s3://target/transfers/session-456/"}
-
-                        _create_receiver_workflow(config)
-                        mock_start.assert_called_once()
-
-    def test_receiver_workflow_logs_manifest_validation_placeholder(self) -> None:
-        """Receiver workflow logs manifest validation against landing storage."""
-        config = self._make_config()
-
-        with patch("redwood_dataagent.agent.log_validate_manifest") as mock_validate:
-            with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
-                with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
-                    mock_landing = MagicMock()
-                    mock_store = MagicMock()
-                    mock_landing_cls.return_value = mock_landing
-                    mock_store_cls.return_value = mock_store
-
-                    mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
-                    mock_manifest = MagicMock()
-                    mock_manifest.transfer_session_id = config.transfer_session_id
-                    mock_manifest.sender_agency = config.sender_agency
-                    mock_manifest.receiver_agency = config.receiver_agency
-                    mock_manifest.total_file_count = 1
-                    mock_landing.validate_manifest.return_value = mock_manifest
-                    mock_landing.decompress_archive.return_value = {"file_count": 0, "total_bytes": 0}
-                    mock_store.store_to_target.return_value = {"status": "stored", "file_count": 0, "target_location": "s3://target/transfers/session-456/"}
-
-                    _create_receiver_workflow(config)
-                    assert mock_validate.call_count >= 1
-
-    def test_receiver_workflow_logs_store_placeholder(self) -> None:
-        """Receiver workflow logs store step against target storage."""
-        config = self._make_config()
-
-        with patch("redwood_dataagent.agent.log_store_data") as mock_store_log:
-            with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
-                with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
-                    mock_landing = MagicMock()
-                    mock_store = MagicMock()
-                    mock_landing_cls.return_value = mock_landing
-                    mock_store_cls.return_value = mock_store
-
-                    mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
-                    mock_manifest = MagicMock()
-                    mock_manifest.transfer_session_id = config.transfer_session_id
-                    mock_manifest.sender_agency = config.sender_agency
-                    mock_manifest.receiver_agency = config.receiver_agency
-                    mock_manifest.total_file_count = 1
-                    mock_landing.validate_manifest.return_value = mock_manifest
-                    mock_landing.decompress_archive.return_value = {"file_count": 0, "total_bytes": 0}
-                    mock_store.store_to_target.return_value = {"status": "stored", "file_count": 0, "target_location": "s3://target/transfers/session-456/"}
-
-                    _create_receiver_workflow(config)
-                    mock_store_log.assert_called_once()
-
-    def test_receiver_workflow_handles_exception(self) -> None:
-        """Receiver workflow handles exceptions gracefully."""
+    def test_receiver_workflow_partial_failure_returns_1(self) -> None:
+        """Returns 1 when at least one transfer fails but others succeed."""
         config = self._make_config()
 
         with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
-            mock_landing = MagicMock()
-            mock_landing_cls.return_value = mock_landing
-            mock_landing.fetch_from_landing_bucket.side_effect = RuntimeError("Test error")
-            exit_code = _create_receiver_workflow(config)
-            assert exit_code == 1
+            with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                mock_landing = MagicMock()
+                mock_store = MagicMock()
+                mock_landing_cls.return_value = mock_landing
+                mock_store_cls.return_value = mock_store
 
-    def test_receiver_workflow_logs_all_paths(self) -> None:
-        """Receiver workflow logs start through complete for success path."""
+                mock_landing.list_sender_agencies.return_value = ["dot"]
+                mock_landing.list_pending_transfers.return_value = ["sess-ok", "sess-bad"]
+
+                ok_manifest = MagicMock()
+                ok_manifest.transfer_session_id = "sess-ok"
+                ok_manifest.receiver_agency = config.receiver_agency
+                ok_manifest.total_file_count = 1
+
+                def fetch_side_effect(**kw: object) -> tuple[bytes, dict]:
+                    if kw["transfer_session_id"] == "sess-bad":
+                        raise RuntimeError("S3 error")
+                    return (b"archive", {})
+
+                mock_landing.fetch_from_landing_bucket.side_effect = fetch_side_effect
+                mock_landing.validate_manifest.return_value = ok_manifest
+                mock_landing.decompress_archive.return_value = {"file_count": 1, "total_bytes": 10}
+                mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
+
+                assert _create_receiver_workflow(config) == 1
+
+    def test_receiver_workflow_logs_pipeline_start_and_complete(self) -> None:
+        """Receiver logs pipeline_start and pipeline_complete for the overall run."""
         config = self._make_config()
 
         with patch("redwood_dataagent.agent.log_pipeline_start") as mock_start:
@@ -479,135 +454,63 @@ class TestReceiverWorkflow:
                         mock_store = MagicMock()
                         mock_landing_cls.return_value = mock_landing
                         mock_store_cls.return_value = mock_store
-
-                        mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
-                        mock_manifest = MagicMock()
-                        mock_manifest.transfer_session_id = config.transfer_session_id
-                        mock_manifest.sender_agency = config.sender_agency
-                        mock_manifest.receiver_agency = config.receiver_agency
-                        mock_manifest.total_file_count = 1
-                        mock_landing.validate_manifest.return_value = mock_manifest
-                        mock_landing.decompress_archive.return_value = {"file_count": 0, "total_bytes": 0}
-                        mock_store.store_to_target.return_value = {"status": "stored", "file_count": 0, "target_location": "s3://target/transfers/session-456/"}
+                        self._setup_mock_landing(mock_landing)
+                        mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
 
                         exit_code = _create_receiver_workflow(config)
                         assert exit_code == 0
                         mock_start.assert_called_once()
                         mock_complete.assert_called_once()
 
+    def test_receiver_workflow_logs_validate_and_store(self) -> None:
+        """Receiver logs validate_manifest and store_data per transfer."""
+        config = self._make_config()
+
+        with patch("redwood_dataagent.agent.log_validate_manifest") as mock_validate:
+            with patch("redwood_dataagent.agent.log_store_data") as mock_store_log:
+                with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+                    with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                        mock_landing = MagicMock()
+                        mock_store = MagicMock()
+                        mock_landing_cls.return_value = mock_landing
+                        mock_store_cls.return_value = mock_store
+                        self._setup_mock_landing(mock_landing)
+                        mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
+
+                        _create_receiver_workflow(config)
+                        assert mock_validate.call_count >= 1
+                        mock_store_log.assert_called_once()
+
+    def test_receiver_workflow_list_sender_agencies_failure_returns_1(self) -> None:
+        """Returns 1 when listing sender agencies raises an exception."""
+        config = self._make_config()
+
+        with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+            mock_landing = MagicMock()
+            mock_landing_cls.return_value = mock_landing
+            mock_landing.list_sender_agencies.side_effect = RuntimeError("S3 down")
+
+            assert _create_receiver_workflow(config) == 1
+
     def test_receiver_workflow_fails_on_manifest_transfer_id_mismatch(self) -> None:
-        """Receiver workflow fails when manifest transfer id does not match config."""
+        """Per-transfer failure when manifest transfer_session_id does not match folder name."""
         config = self._make_config()
 
         with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
             with patch("redwood_dataagent.agent.ReceiverTargetStore"):
                 mock_landing = MagicMock()
                 mock_landing_cls.return_value = mock_landing
+                mock_landing.list_sender_agencies.return_value = ["dot"]
+                mock_landing.list_pending_transfers.return_value = ["session-456"]
                 mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
 
                 bad_manifest = MagicMock()
-                bad_manifest.transfer_session_id = "different-session"
-                bad_manifest.sender_agency = config.sender_agency
+                bad_manifest.transfer_session_id = "different-session"  # mismatch
                 bad_manifest.receiver_agency = config.receiver_agency
                 bad_manifest.total_file_count = 1
                 mock_landing.validate_manifest.return_value = bad_manifest
 
-                exit_code = _create_receiver_workflow(config)
-                assert exit_code == 1
-
-
-class TestScanSenderDirectory:
-    """Tests for _scan_sender_directory() function."""
-
-    def test_scan_sender_directory_returns_tuples(self) -> None:
-        """_scan_sender_directory returns list of (s3_path, file_name) tuples."""
-        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-            mock_client = MagicMock()
-            mock_s3_class.return_value = mock_client
-            mock_client._client.list_objects_v2.return_value = {
-                "Contents": [{"Key": "incoming/file1.json"}]
-            }
-            mock_client._client.head_object.side_effect = Exception("No marker")
-
-            result = _scan_sender_directory("s3://bucket/incoming/", "us-east-1")
-            
-            assert isinstance(result, list)
-            assert len(result) == 1
-            assert result[0][0].startswith("s3://")
-            assert result[0][1] == "file1.json"
-
-    def test_scan_sender_directory_skips_processed_files_with_done_marker(self) -> None:
-        """Files with processed .done markers are skipped to avoid re-staging."""
-        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-            mock_client = MagicMock()
-            mock_s3_class.return_value = mock_client
-            mock_client._client.list_objects_v2.return_value = {
-                "Contents": [{"Key": "incoming/file1.json"}]
-            }
-            # Marker exists for file1.json
-            mock_client._client.head_object.return_value = {"ResponseMetadata": {}}
-
-            result = _scan_sender_directory("s3://bucket/incoming/", "us-east-1")
-
-            assert result == []
-
-
-class TestMarkFileProcessed:
-    """Tests for _mark_file_processed() function."""
-
-    def test_mark_file_processed_creates_marker(self) -> None:
-        """_mark_file_processed creates done marker in processed folder."""
-        with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-            mock_client = MagicMock()
-            mock_s3_class.return_value = mock_client
-            
-            _mark_file_processed("test.json", "s3://bucket/incoming/", "us-east-1")
-            
-            mock_client._client.put_object.assert_called_once()
-            call_kwargs = mock_client._client.put_object.call_args[1]
-            assert "processed" in call_kwargs["Key"]
-            assert "test.json" in call_kwargs["Key"]
-
-
-class TestErrorPaths:
-    """Tests for error handling in sender workflow."""
-
-    def test_sender_workflow_with_mark_file_failure(self, tmp_path) -> None:
-        """Sender workflow handles mark_file_processed errors gracefully."""
-        test_file = tmp_path / "records.json"
-        test_file.write_text('[{"id": 1}]')
-        config = AgentConfig(
-            agent_mode="sender",
-            tenant="tts",
-            environment="development",
-            aws_region="us-east-1",
-            log_level="INFO",
-            transfer_session_id="session-123",
-            sender_agency="dot",
-            receiver_agency="gsa",
-            sender_staging_bucket="tts-core-development-dot-data-staging",
-            receiver_landing_bucket="tts-core-development-gsa-data-landing",
-            receiver_target_bucket="tts-core-development-gsa-data-target",
-            sender_data_directory="s3://bucket/incoming/",
-        )
-
-        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
-            with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-                with patch("redwood_dataagent.agent._mark_file_processed") as mock_mark:
-                    mock_client = MagicMock()
-                    mock_s3_class.return_value = mock_client
-                    
-                    def mock_download(bucket, key, dest):
-                        import shutil
-                        shutil.copy2(test_file, dest)
-                    
-                    mock_client.download_file.side_effect = mock_download
-                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
-                    mock_mark.side_effect = Exception("Mark failed")
-                    
-                    # Mark failure should cause workflow to fail
-                    exit_code = _create_sender_workflow(config)
-                    assert exit_code == 1
+                assert _create_receiver_workflow(config) == 1
 
 
 class TestRunAgent:

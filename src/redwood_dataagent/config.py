@@ -52,10 +52,11 @@ def load_config() -> AgentConfig:
     ---------------------
     AGENT_MODE
         ``"sender"`` or ``"receiver"``. Defaults to ``"receiver"``.
-    SENDER_AGENCY
-        Source agency code, e.g. ``"dot"``. Defaults to ``"dot"``.
-    RECEIVER_AGENCY
-        Destination agency code, e.g. ``"gsa"``. Defaults to ``"gsa"``.
+    AGENCY
+        Agency code for this pod, e.g. ``"dot"`` or ``"gsa"``. When
+        ``AGENT_MODE=sender`` this becomes the ``sender_agency``; when
+        ``AGENT_MODE=receiver`` it becomes the ``receiver_agency``.
+        **Required** — no default is applied.
     TENANT
         Organisational tenant identifier. Defaults to ``"tts"``.
     ENVIRONMENT
@@ -84,13 +85,12 @@ def load_config() -> AgentConfig:
             f"AGENT_MODE must be one of {sorted(VALID_AGENT_MODES)}, got '{agent_mode}'"
         )
 
-    sender_agency = os.getenv("SENDER_AGENCY", "dot").strip().lower()
-    if not sender_agency:
-        raise ConfigurationError("SENDER_AGENCY cannot be blank")
+    agency = os.getenv("AGENCY", "").strip().lower()
+    if not agency:
+        raise ConfigurationError("AGENCY is required and cannot be blank")
 
-    receiver_agency = os.getenv("RECEIVER_AGENCY", "gsa").strip().lower()
-    if not receiver_agency:
-        raise ConfigurationError("RECEIVER_AGENCY cannot be blank")
+    sender_agency = agency if agent_mode == "sender" else ""
+    receiver_agency = agency if agent_mode == "receiver" else ""
 
     environment = os.getenv("ENVIRONMENT", "development").strip()
     if not environment:
@@ -99,12 +99,24 @@ def load_config() -> AgentConfig:
     # Every run gets a correlation identifier even when the caller does not supply one.
     transfer_session_id = os.getenv("TRANSFER_SESSION_ID") or str(uuid.uuid4())
 
-    sender_staging_bucket = build_sender_bucket(
-        sender_agency, environment, StoragePurpose.STAGING
-    )
-    sender_data_directory = (
-        f"s3://{sender_staging_bucket}/{SenderStoragePath.incoming_prefix()}"
-    )
+    if agent_mode == "sender":
+        sender_staging_bucket = build_sender_bucket(
+            sender_agency, environment, StoragePurpose.STAGING
+        )
+        sender_data_directory = (
+            f"s3://{sender_staging_bucket}/{SenderStoragePath.incoming_prefix()}"
+        )
+        receiver_landing_bucket = ""
+        receiver_target_bucket = ""
+    else:  # receiver
+        sender_staging_bucket = ""
+        sender_data_directory = ""
+        receiver_landing_bucket = build_receiver_bucket(
+            receiver_agency, environment, "landing"
+        )
+        receiver_target_bucket = build_receiver_bucket(
+            receiver_agency, environment, "target"
+        )
 
     return AgentConfig(
         agent_mode=agent_mode,
@@ -116,11 +128,7 @@ def load_config() -> AgentConfig:
         sender_agency=sender_agency,
         receiver_agency=receiver_agency,
         sender_staging_bucket=sender_staging_bucket,
-        receiver_landing_bucket=build_receiver_bucket(
-            receiver_agency, environment, "landing"
-        ),
-        receiver_target_bucket=build_receiver_bucket(
-            receiver_agency, environment, "target"
-        ),
+        receiver_landing_bucket=receiver_landing_bucket,
+        receiver_target_bucket=receiver_target_bucket,
         sender_data_directory=sender_data_directory,
     )

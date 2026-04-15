@@ -602,7 +602,6 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             approver = PolicyApprover()
             is_approved = approver.approve_transfer(
                 config.sender_agency,
-                config.receiver_agency,
                 1,
             )
 
@@ -830,26 +829,152 @@ def _compress_sender_data(archive_path: Path, staged_file: Path, archive_member_
         tar.add(staged_file, arcname=archive_member_name)
 
 
-def _create_receiver_workflow(config: AgentConfig) -> int:
-    """Execute receiver-side transfer workflow.
-
-    Implements: Validate → Decompress → Verify → Store
+def _process_single_receiver_transfer(
+    landing_zone: "ReceiverLandingZone",
+    target_store: "ReceiverTargetStore",
+    config: AgentConfig,
+    sender_agency: str,
+    transfer_session_id: str,
+) -> int:
+    """Fetch, validate, decompress, and store one transfer from the landing bucket.
 
     Parameters
     ----------
+    landing_zone : ReceiverLandingZone
+    target_store : ReceiverTargetStore
     config : AgentConfig
-        Validated runtime configuration.
+    sender_agency : str
+        Discovered sender agency code (e.g., "dot").
+    transfer_session_id : str
+        Discovered transfer session ID from the S3 folder name.
 
     Returns
     -------
     int
-        Exit code (0 for success, non-zero for failure).
+        0 on success, 1 on failure.
     """
     try:
-        # 1. Log pipeline start
+        archive_bytes, manifest_dict = _retry_operation(
+            "landing_fetch",
+            lambda: landing_zone.fetch_from_landing_bucket(
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=config.receiver_agency,
+            ),
+        )
+
+        manifest = _retry_operation(
+            "manifest_validate",
+            lambda: landing_zone.validate_manifest(
+                manifest_dict=manifest_dict,
+                archive_bytes=archive_bytes,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=config.receiver_agency,
+            ),
+        )
+
+        # Guardrail: manifest identity must match what we discovered from S3.
+        if manifest.transfer_session_id != transfer_session_id:
+            raise StorageError(
+                "Manifest transfer_session_id mismatch: "
+                f"expected {transfer_session_id}, got {manifest.transfer_session_id}"
+            )
+        if manifest.receiver_agency and manifest.receiver_agency != config.receiver_agency:
+            raise StorageError(
+                "Manifest receiver_agency mismatch: "
+                f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
+            )
+
+        log_validate_manifest(
+            transfer_session_id=transfer_session_id,
+            sender_agency=sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.SUCCESS,
+            details={
+                "manifest_source": "landing_storage",
+                "manifest_file_count": manifest.total_file_count,
+                "transfer_session_id": manifest.transfer_session_id,
+            },
+        )
+
+        with tempfile.TemporaryDirectory(prefix="redwood-receiver-") as tmpdir:
+            extraction_metadata = _retry_operation(
+                "decompress",
+                lambda: landing_zone.decompress_archive(
+                    archive_bytes=archive_bytes,
+                    target_directory=Path(tmpdir),
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=config.receiver_agency,
+                ),
+            )
+
+            log_decompress(
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=config.receiver_agency,
+                outcome=EventOutcome.SUCCESS,
+                details={
+                    "step": "decompress",
+                    "files_processed": extraction_metadata.get("file_count", 0),
+                    "total_bytes": extraction_metadata.get("total_bytes", 0),
+                },
+            )
+
+            store_result = _retry_operation(
+                "store_to_target",
+                lambda: target_store.store_to_target(
+                    extracted_files_dir=Path(tmpdir),
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=config.receiver_agency,
+                ),
+            )
+
+        log_store_data(
+            transfer_session_id=transfer_session_id,
+            sender_agency=sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.SUCCESS,
+            details={
+                "step": "store",
+                "destination_bucket": config.receiver_target_bucket,
+                "status": store_result.get("status"),
+                "file_count": store_result.get("file_count", 0),
+                "target_location": store_result.get("target_location"),
+            },
+        )
+
+        return 0
+
+    except Exception as e:
+        LOGGER.error(
+            f"Transfer {transfer_session_id} from {sender_agency} failed: {e}",
+            extra={
+                "event": "receiver_transfer_error",
+                "sender_agency": sender_agency,
+                "transfer_session_id": transfer_session_id,
+                "error_type": type(e).__name__,
+            },
+        )
+        return 1
+
+
+def _create_receiver_workflow(config: AgentConfig) -> int:
+    """Execute receiver-side transfer workflow.
+
+    Polls all sender agency folders in the landing bucket and processes every
+    pending transfer session found.  The target-store idempotency marker prevents
+    re-processing already-stored sessions.
+
+    Returns 0 when all discovered transfers succeed (or there is nothing to do).
+    Returns 1 if any individual transfer fails.
+    """
+    try:
         log_pipeline_start(
             transfer_session_id=config.transfer_session_id,
-            sender_agency=config.sender_agency,
+            sender_agency="",
             receiver_agency=config.receiver_agency,
         )
 
@@ -865,116 +990,69 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             environment=config.environment,
         )
 
-        # 2. Fetch artifacts from receiver landing bucket.
-        archive_bytes, manifest_dict = _retry_operation(
-            "landing_fetch",
-            lambda: landing_zone.fetch_from_landing_bucket(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-            ),
+        # Scan the landing bucket for all sender agency folders.
+        sender_agencies = _retry_operation(
+            "list_sender_agencies",
+            landing_zone.list_sender_agencies,
         )
 
-        # 3. Validate manifest and checksum.
-        manifest = _retry_operation(
-            "manifest_validate",
-            lambda: landing_zone.validate_manifest(
-                manifest_dict=manifest_dict,
-                archive_bytes=archive_bytes,
+        if not sender_agencies:
+            LOGGER.info(
+                "No sender agency folders found in landing bucket — nothing to process.",
+                extra={"event": "receiver_no_senders", "bucket": config.receiver_landing_bucket},
+            )
+            log_pipeline_complete(
                 transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-            ),
-        )
-
-        # Guardrail: ensure manifest identity matches configured transfer context.
-        if manifest.transfer_session_id != config.transfer_session_id:
-            raise StorageError(
-                "Manifest transfer_session_id mismatch: "
-                f"expected {config.transfer_session_id}, got {manifest.transfer_session_id}"
-            )
-        if manifest.sender_agency != config.sender_agency:
-            raise StorageError(
-                "Manifest sender_agency mismatch: "
-                f"expected {config.sender_agency}, got {manifest.sender_agency}"
-            )
-        if manifest.receiver_agency != config.receiver_agency:
-            raise StorageError(
-                "Manifest receiver_agency mismatch: "
-                f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
-            )
-
-        log_validate_manifest(
-            transfer_session_id=config.transfer_session_id,
-            sender_agency=config.sender_agency,
-            receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.SUCCESS,
-            details={
-                "manifest_source": "landing_storage",
-                "manifest_file_count": manifest.total_file_count,
-                "transfer_session_id": manifest.transfer_session_id,
-            },
-        )
-
-        # 4. Decompress to temporary working directory.
-        with tempfile.TemporaryDirectory(prefix="redwood-receiver-") as tmpdir:
-            extraction_metadata = _retry_operation(
-                "decompress",
-                lambda: landing_zone.decompress_archive(
-                    archive_bytes=archive_bytes,
-                    target_directory=Path(tmpdir),
-                    transfer_session_id=config.transfer_session_id,
-                    sender_agency=config.sender_agency,
-                    receiver_agency=config.receiver_agency,
-                ),
-            )
-
-            log_decompress(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
+                sender_agency="",
                 receiver_agency=config.receiver_agency,
                 outcome=EventOutcome.SUCCESS,
-                details={
-                    "step": "decompress",
-                    "files_processed": extraction_metadata.get("file_count", 0),
-                    "total_bytes": extraction_metadata.get("total_bytes", 0),
-                },
             )
+            return 0
 
-            # 5. Store extracted data to receiver target bucket.
-            store_result = _retry_operation(
-                "store_to_target",
-                lambda: target_store.store_to_target(
-                    extracted_files_dir=Path(tmpdir),
-                    transfer_session_id=config.transfer_session_id,
-                    sender_agency=config.sender_agency,
-                    receiver_agency=config.receiver_agency,
-                ),
-            )
-
-        log_store_data(
-            transfer_session_id=config.transfer_session_id,
-            sender_agency=config.sender_agency,
-            receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.SUCCESS,
-            details={
-                "step": "store",
-                "destination_bucket": config.receiver_target_bucket,
-                "status": store_result.get("status"),
-                "file_count": store_result.get("file_count", 0),
-                "target_location": store_result.get("target_location"),
-            },
+        LOGGER.info(
+            f"Found {len(sender_agencies)} sender agency folder(s): {sender_agencies}",
+            extra={"event": "receiver_senders_found", "sender_agencies": sender_agencies},
         )
 
-        # Pipeline completion
+        processed = 0
+        failed = 0
+        for sender_agency in sender_agencies:
+            transfer_sessions = _retry_operation(
+                f"list_pending_transfers_{sender_agency}",
+                lambda sa=sender_agency: landing_zone.list_pending_transfers(sa),
+            )
+            for transfer_session_id in transfer_sessions:
+                LOGGER.info(
+                    f"Processing transfer: {sender_agency}/{transfer_session_id}",
+                    extra={
+                        "event": "receiver_transfer_start",
+                        "sender_agency": sender_agency,
+                        "transfer_session_id": transfer_session_id,
+                    },
+                )
+                result = _process_single_receiver_transfer(
+                    landing_zone, target_store, config, sender_agency, transfer_session_id
+                )
+                if result == 0:
+                    processed += 1
+                else:
+                    failed += 1
+
+        LOGGER.info(
+            f"Receiver scan complete: {processed} processed, {failed} failed",
+            extra={"event": "receiver_scan_complete", "processed": processed, "failed": failed},
+        )
+
+        outcome = EventOutcome.SUCCESS if failed == 0 else EventOutcome.FAILURE
         log_pipeline_complete(
             transfer_session_id=config.transfer_session_id,
-            sender_agency=config.sender_agency,
+            sender_agency="",
             receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.SUCCESS,
+            outcome=outcome,
+            details={"processed": processed, "failed": failed},
         )
 
-        return 0
+        return 0 if failed == 0 else 1
 
     except Exception as e:
         LOGGER.error(
@@ -983,7 +1061,7 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
         )
         log_pipeline_complete(
             transfer_session_id=config.transfer_session_id,
-            sender_agency=config.sender_agency,
+            sender_agency="",
             receiver_agency=config.receiver_agency,
             outcome=EventOutcome.FAILURE,
             details={"error": str(e)},

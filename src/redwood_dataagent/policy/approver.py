@@ -31,18 +31,15 @@ class PolicyApprover:
 
     def approve_transfer(
         self,
-        sender_agency: str,
-        receiver_agency: str,
+        agency: str,
         file_count: int,
     ) -> bool:
         """Evaluate whether a proposed transfer should be approved.
 
         Parameters
         ----------
-        sender_agency : str
-            Source agency code (e.g., "dot").
-        receiver_agency : str
-            Destination agency code (e.g., "gsa").
+        agency : str
+            The agency code for this pod (sender or receiver, from AGENCY env var).
         file_count : int
             Number of files proposed for transfer.
 
@@ -54,23 +51,17 @@ class PolicyApprover:
         Raises
         ------
         PolicyApprovalError
-            If required fields are blank or file_count is invalid.
+            If agency is blank or file_count is invalid.
 
         Examples
         --------
         >>> approver = PolicyApprover()
-        >>> approver.approve_transfer("dot", "gsa", 42)
+        >>> approver.approve_transfer("dot", 42)
         True
-
-        >>> approver_strict = PolicyApprover(strict_mode=True)
-        >>> approver_strict.approve_transfer("unknown", "gsa", 1)
-        False (when Phase 2 real policy is implemented)
         """
         # Validate inputs
-        if not sender_agency or not sender_agency.strip():
-            raise PolicyApprovalError("Sender agency cannot be blank")
-        if not receiver_agency or not receiver_agency.strip():
-            raise PolicyApprovalError("Receiver agency cannot be blank")
+        if not agency or not agency.strip():
+            raise PolicyApprovalError("Agency cannot be blank")
         if file_count < 1:
             raise PolicyApprovalError(
                 f"File count must be at least 1, got {file_count}"

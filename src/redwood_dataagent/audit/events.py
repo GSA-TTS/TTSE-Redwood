@@ -114,8 +114,8 @@ class AuditEvent(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC timestamp when event occurred"
     )
-    sender_agency: str = Field(..., min_length=1, description="Sending agency code")
-    receiver_agency: str = Field(..., min_length=1, description="Receiving agency code")
+    sender_agency: str = Field(default="", description="Sending agency code (empty when receiver pod does not know the sender)")
+    receiver_agency: str = Field(default="", description="Receiving agency code (empty when sender pod does not know the receiver)")
     stage: str = Field(..., description="Pipeline stage (sender, transfer, receiver)")
     outcome: EventOutcome = Field(..., description="Operation outcome")
     destination_host: Optional[str] = Field(

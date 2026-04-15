@@ -59,6 +59,8 @@ pytest
 - [ ] implement real policy approval engine
 - [ ] add source database extraction (sender-side)
 - [ ] implement S3 event-driven triggers (SQS/Lambda) to replace polling
+- [ ] add transfer session state tracking (queued, in-progress, succeeded, failed) for operational visibility
+- [ ] introduce SQS-based transfer queueing with DLQ and replay workflow for failed sessions
 - [ ] add encryption key rotation and management
 - [ ] deploy receiver workflows on container orchestration platform
 - [ ] add retry and resume mechanisms for failed transfers

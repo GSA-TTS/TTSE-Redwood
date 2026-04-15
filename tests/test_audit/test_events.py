@@ -285,27 +285,31 @@ class TestAuditEvent:
         assert example["event_type"] == "pipeline_start"
         assert example["transfer_session_id"] == "transfer-20260317-001"
 
-    def test_event_sender_receiver_agency_validation(self):
-        """Test that sender and receiver agency codes are required and non-empty."""
-        with pytest.raises(ValidationError):
-            AuditEvent(
-                event_type=AuditEventType.PIPELINE_START,
-                transfer_session_id="transfer-001",
-                sender_agency="",  # Empty
-                receiver_agency="gsa",
-                stage="sender",
-                outcome=EventOutcome.SUCCESS
-            )
+    def test_event_sender_receiver_agency_optional(self):
+        """sender_agency and receiver_agency can be empty — pods only know their own agency."""
+        # Sender pod: knows sender_agency, not receiver_agency
+        event = AuditEvent(
+            event_type=AuditEventType.PIPELINE_START,
+            transfer_session_id="transfer-001",
+            sender_agency="dot",
+            receiver_agency="",
+            stage="sender",
+            outcome=EventOutcome.SUCCESS
+        )
+        assert event.sender_agency == "dot"
+        assert event.receiver_agency == ""
 
-        with pytest.raises(ValidationError):
-            AuditEvent(
-                event_type=AuditEventType.PIPELINE_START,
-                transfer_session_id="transfer-001",
-                sender_agency="dot",
-                receiver_agency="",  # Empty
-                stage="sender",
-                outcome=EventOutcome.SUCCESS
-            )
+        # Receiver pod: knows receiver_agency, not sender_agency
+        event2 = AuditEvent(
+            event_type=AuditEventType.PIPELINE_START,
+            transfer_session_id="transfer-001",
+            sender_agency="",
+            receiver_agency="gsa",
+            stage="receiver",
+            outcome=EventOutcome.SUCCESS
+        )
+        assert event2.sender_agency == ""
+        assert event2.receiver_agency == "gsa"
 
     def test_event_timestamp_iso_format_with_z_suffix(self):
         """Test that timestamp in structured log is ISO 8601 with Z suffix."""
