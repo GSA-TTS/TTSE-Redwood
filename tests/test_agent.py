@@ -342,7 +342,7 @@ class TestReceiverWorkflow:
         mock_manifest.transfer_session_id = session_id
         mock_manifest.sender_agency = sender
         mock_manifest.receiver_agency = receiver
-        mock_manifest.total_file_count = 1
+        mock_manifest.total_file_count = 2  # Updated: source file + archive
         mock_landing.fetch_from_landing_bucket.return_value = (b"archive-bytes", {})
         mock_landing.validate_manifest.return_value = mock_manifest
         mock_landing.decompress_archive.return_value = {"file_count": 1, "total_bytes": 42}
@@ -399,7 +399,7 @@ class TestReceiverWorkflow:
                     m = MagicMock()
                     m.transfer_session_id = f"{sa}-sess-001"
                     m.receiver_agency = config.receiver_agency
-                    m.total_file_count = 1
+                    m.total_file_count = 2  # Updated: source file + archive
                     return m
 
                 mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
@@ -428,7 +428,7 @@ class TestReceiverWorkflow:
                 ok_manifest = MagicMock()
                 ok_manifest.transfer_session_id = "sess-ok"
                 ok_manifest.receiver_agency = config.receiver_agency
-                ok_manifest.total_file_count = 1
+                ok_manifest.total_file_count = 2  # Updated: source file + archive
 
                 def fetch_side_effect(**kw: object) -> tuple[bytes, dict]:
                     if kw["transfer_session_id"] == "sess-bad":
