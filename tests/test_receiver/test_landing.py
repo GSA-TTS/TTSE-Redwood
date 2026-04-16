@@ -268,11 +268,11 @@ class TestReceiverLandingZoneDiscovery:
             receiver_landing_zone.list_sender_agencies()
 
     def test_list_pending_transfers_returns_session_ids(self, receiver_landing_zone):
-        """Returns transfer session IDs from the sender's transfers/ subfolder."""
+        """Returns transfer session IDs from the sender's root subfolder."""
         receiver_landing_zone.s3_client._client.list_objects_v2.return_value = {
             "CommonPrefixes": [
-                {"Prefix": "dot/transfers/sess-001/"},
-                {"Prefix": "dot/transfers/sess-002/"},
+                {"Prefix": "dot/sess-001/"},
+                {"Prefix": "dot/sess-002/"},
             ]
         }
 
@@ -282,7 +282,7 @@ class TestReceiverLandingZoneDiscovery:
         receiver_landing_zone.s3_client._client.list_objects_v2.assert_called_once_with(
             Bucket="gsa-data-dev-landing",
             Delimiter="/",
-            Prefix="dot/transfers/",
+            Prefix="dot/",
         )
 
     def test_list_pending_transfers_no_sessions(self, receiver_landing_zone):

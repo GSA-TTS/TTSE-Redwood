@@ -93,12 +93,12 @@ class TestReceiverTargetStoreSuccess:
         # Check that put_object was called with correct keys
         calls = receiver_target_store.s3_client._client.put_object.call_args_list
 
-        # Should have been called for: file1.txt, file2.csv, file3.json, .stored marker
+        # Should have been called for: file1.txt, file2.csv, file3.json, .done marker
         expected_keys = [
-            "transfers/transfer-20260407-001/dot/file1.txt",
-            "transfers/transfer-20260407-001/dot/file2.csv",
-            "transfers/transfer-20260407-001/dot/subdir/file3.json",
-            "transfers/transfer-20260407-001/.stored",
+            "transfers/dot/transfer-20260407-001/file1.txt",
+            "transfers/dot/transfer-20260407-001/file2.csv",
+            "transfers/dot/transfer-20260407-001/subdir/file3.json",
+            "processed/dot/transfer-20260407-001.done",
         ]
 
         actual_keys = [call.kwargs["Key"] for call in calls]
@@ -120,7 +120,7 @@ class TestReceiverTargetStoreSuccess:
         # Find the marker put_object call
         marker_call = None
         for call in receiver_target_store.s3_client._client.put_object.call_args_list:
-            if call.kwargs["Key"] == "transfers/transfer-20260407-001/.stored":
+            if call.kwargs["Key"] == "processed/dot/transfer-20260407-001.done":
                 marker_call = call
                 break
 
@@ -182,7 +182,7 @@ class TestReceiverTargetStoreIdempotency:
         # Verify head_object was called with correct marker key
         receiver_target_store.s3_client._client.head_object.assert_called_once_with(
             Bucket="tts-core-dev-gsa-data-target",
-            Key="transfers/transfer-20260407-001/.stored"
+            Key="processed/dot/transfer-20260407-001.done"
         )
 
 
@@ -208,7 +208,7 @@ class TestReceiverTargetStoreErrors:
 
         def put_object_side_effect(**kwargs):
             # First calls (files) succeed, marker creation fails
-            if ".stored" in kwargs["Key"]:
+            if kwargs["Key"].endswith(".done"):
                 raise Exception("AccessDenied on marker")
             return None
 
@@ -242,7 +242,7 @@ class TestReceiverTargetStoreErrors:
 
 
 class TestReceiverTargetStoreMarkerObject:
-    """Tests for marker object format and tagging."""
+    """Tests for marker object metadata format."""
 
     def test_marker_metadata_format(self, receiver_target_store, sample_extracted_files):
         """Test that marker object has correct metadata format."""
@@ -259,7 +259,7 @@ class TestReceiverTargetStoreMarkerObject:
         # Get the marker put_object call
         marker_call = None
         for call in receiver_target_store.s3_client._client.put_object.call_args_list:
-            if ".stored" in call.kwargs["Key"]:
+            if call.kwargs["Key"].endswith(".done"):
                 marker_call = call
                 break
 
@@ -280,8 +280,8 @@ class TestReceiverTargetStoreMarkerObject:
         # Verify ISO format timestamp
         datetime.fromisoformat(marker_data["stored_at"])
 
-    def test_marker_tagging_format(self, receiver_target_store, sample_extracted_files):
-        """Test that marker object tags are correctly formatted."""
+    def test_marker_has_no_tagging(self, receiver_target_store, sample_extracted_files):
+        """Test that marker object write does not require S3 object tagging."""
         receiver_target_store.s3_client._client.head_object.side_effect = Exception("NoSuchKey")
         receiver_target_store.s3_client._client.put_object.return_value = None
 
@@ -295,16 +295,12 @@ class TestReceiverTargetStoreMarkerObject:
         # Get the marker put_object call
         marker_call = None
         for call in receiver_target_store.s3_client._client.put_object.call_args_list:
-            if ".stored" in call.kwargs["Key"]:
+            if call.kwargs["Key"].endswith(".done"):
                 marker_call = call
                 break
 
         assert marker_call is not None
-
-        # Verify tagging includes transfer_id
-        tagging = marker_call.kwargs["Tagging"]
-        assert "transfer_id=transfer-20260407-001" in tagging
-        assert "stored_at=" in tagging
+        assert "Tagging" not in marker_call.kwargs
 
 
 class TestReceiverTargetStoreFileHandling:
@@ -376,7 +372,7 @@ class TestReceiverTargetStoreIntegration:
         # Verify result
         assert result["status"] == "stored"
         assert result["file_count"] == 3
-        assert result["target_location"] == "s3://tts-core-dev-gsa-data-target/transfers/transfer-20260407-001/"
+        assert result["target_location"] == "s3://tts-core-dev-gsa-data-target/transfers/dot/transfer-20260407-001/"
 
         # Verify S3 operations
         assert receiver_target_store.s3_client._client.head_object.called
