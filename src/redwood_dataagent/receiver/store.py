@@ -61,7 +61,7 @@ class ReceiverTargetStore:
     ) -> dict:
         """Store extracted files to target S3 bucket with idempotency.
 
-        Uses S3 marker object (transfers/{transfer_session_id}/.stored) to prevent
+        Uses S3 marker object (processed/{sender_agency}/{transfer_session_id}.done) to prevent
         duplicate uploads on retry.
 
         Args:
@@ -82,7 +82,8 @@ class ReceiverTargetStore:
             StorageError: If store operation fails
         """
         try:
-            marker_key = f"transfers/{transfer_session_id}/.stored"
+            marker_key = f"processed/{sender_agency}/{transfer_session_id}.done"
+            target_location = f"s3://{self.target_bucket}/transfers/{sender_agency}/{transfer_session_id}/"
 
             # Step 1: Check idempotency (marker object)
             if self._is_already_stored(marker_key):
@@ -98,19 +99,19 @@ class ReceiverTargetStore:
                     outcome=EventOutcome.SUCCESS,
                     details={
                         "action": "store_to_target_idempotent_skip",
-                        "target_location": f"s3://{self.target_bucket}/transfers/{transfer_session_id}/",
+                        "target_location": target_location,
                     },
                 )
 
                 return {
                     "status": "already_stored",
-                    "target_location": f"s3://{self.target_bucket}/transfers/{transfer_session_id}/",
+                    "target_location": target_location,
                 }
 
             # Step 2: Upload files to target
             file_count = 0
             total_bytes = 0
-            target_prefix = f"transfers/{transfer_session_id}/{sender_agency}/"
+            target_prefix = f"transfers/{sender_agency}/{transfer_session_id}/"
 
             for file_path in sorted(extracted_files_dir.rglob("*")):
                 if file_path.is_file():
@@ -128,8 +129,6 @@ class ReceiverTargetStore:
             # Step 3: Create marker object (idempotency guard)
             stored_at = datetime.now(timezone.utc).isoformat()
             self._mark_stored(marker_key, transfer_session_id, file_count, total_bytes, stored_at)
-
-            target_location = f"s3://{self.target_bucket}/transfers/{transfer_session_id}/"
 
             # Step 4: Log successful store
             log_event(
@@ -250,7 +249,6 @@ class ReceiverTargetStore:
                 Bucket=self.target_bucket,
                 Key=marker_key,
                 Body=json.dumps(marker_metadata).encode("utf-8"),
-                Tagging=f"transfer_id={transfer_session_id}&stored_at={stored_at.replace(':', '%3A')}"
             )
 
             _logger.info(f"Created marker object {marker_key} for idempotency")

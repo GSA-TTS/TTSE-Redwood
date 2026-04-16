@@ -16,7 +16,7 @@ Supported purposes:
 Path patterns:
 - Sender incoming: incoming/
 - Sender transfers: transfers/{transfer_session_id}/{file_name}
-- Receiver landing: {sender_agency}/transfers/{transfer_session_id}/{file_name}
+- Receiver landing: {sender_agency}/{transfer_session_id}/{file_name}
 - Receiver extracted: extracted/{transfer_session_id}/{file_name}
 """
 
@@ -117,7 +117,7 @@ class ReceiverStoragePath(BaseModel):
         Build a landing zone path on receiver storage.
 
         Pattern (legacy): landing/{transfer_session_id}/{file_name}
-        Pattern (agency-scoped): {sender_agency}/transfers/{transfer_session_id}/{file_name}
+        Pattern (agency-scoped): {sender_agency}/{transfer_session_id}/{file_name}
 
         Receiver-side landing is the inbound zone where SFTP transfers arrive before
         validation and extraction.
@@ -150,7 +150,7 @@ class ReceiverStoragePath(BaseModel):
 
         if sender_agency is not None:
             sender_agency = sender_agency.strip()
-            return f"{sender_agency}/transfers/{transfer_session_id}/{file_name}"
+            return f"{sender_agency}/{transfer_session_id}/{file_name}"
         
         return f"landing/{transfer_session_id}/{file_name}"
 

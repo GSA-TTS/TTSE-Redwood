@@ -88,7 +88,7 @@ class ReceiverLandingZone:
     def list_pending_transfers(self, sender_agency: str) -> list[str]:
         """List transfer session IDs under a sender agency folder.
 
-        Scans ``{sender_agency}/transfers/`` for session sub-folders.
+        Scans ``{sender_agency}/`` for session sub-folders.
         The target-store idempotency marker prevents re-processing already-stored sessions.
 
         Args:
@@ -101,14 +101,14 @@ class ReceiverLandingZone:
             StorageError: If the S3 listing fails
         """
         try:
-            prefix = f"{sender_agency}/transfers/"
+            prefix = f"{sender_agency}/"
             response = self.s3_client._client.list_objects_v2(
                 Bucket=self.landing_bucket,
                 Delimiter="/",
                 Prefix=prefix,
             )
             prefixes = response.get("CommonPrefixes", [])
-            # "dot/transfers/sess-001/" → "sess-001"
+            # "dot/sess-001/" → "sess-001"
             sessions = [p["Prefix"].rstrip("/").split("/")[-1] for p in prefixes]
             _logger.info(
                 f"Found {len(sessions)} transfer session(s) for sender {sender_agency}: {sessions}"
