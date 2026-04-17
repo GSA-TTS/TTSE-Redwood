@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from .exceptions import ConfigurationError
 from .storage.conventions import (
@@ -97,7 +98,13 @@ def load_config() -> AgentConfig:
         raise ConfigurationError("ENVIRONMENT cannot be blank")
 
     # Every run gets a correlation identifier even when the caller does not supply one.
-    transfer_session_id = os.getenv("TRANSFER_SESSION_ID") or str(uuid.uuid4())
+    # Format: YYYYMMDD-HHMMSS-{uuid} for easy sorting and timestamp tracking
+    if os.getenv("TRANSFER_SESSION_ID"):
+        transfer_session_id = os.getenv("TRANSFER_SESSION_ID")
+    else:
+        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        session_uuid = str(uuid.uuid4())[:8]
+        transfer_session_id = f"{timestamp}-{session_uuid}"
 
     if agent_mode == "sender":
         sender_staging_bucket = build_sender_bucket(

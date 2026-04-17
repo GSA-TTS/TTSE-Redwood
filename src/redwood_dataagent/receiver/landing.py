@@ -234,19 +234,36 @@ class ReceiverLandingZone:
             ManifestValidationError: If manifest is invalid or checksum mismatches
         """
         try:
+            # Convert renamed archive fields back to standard format for Pydantic model
+            # The sender writes zip_file_name and zip_file_size_bytes for the archive entry
+            # but Pydantic expects file_name and file_size_bytes
+            manifest_dict_normalized = dict(manifest_dict)
+            if "files" in manifest_dict_normalized and len(manifest_dict_normalized["files"]) > 1:
+                archive_entry = manifest_dict_normalized["files"][1]
+                # Convert renamed fields back to standard names
+                if "zip_file_name" in archive_entry:
+                    archive_entry["file_name"] = archive_entry.pop("zip_file_name")
+                if "zip_file_size_bytes" in archive_entry:
+                    archive_entry["file_size_bytes"] = archive_entry.pop("zip_file_size_bytes")
+            
             # Parse and validate manifest structure
-            manifest = TransferManifest(**manifest_dict)
+            manifest = TransferManifest(**manifest_dict_normalized)
 
             # Verify archive checksum against manifest
             archive_checksum = hashlib.sha256(archive_bytes).hexdigest()
 
-            # Manifest should have one entry for the archive
-            if len(manifest.files) != 1:
+            # Manifest should have 2 entries: source file + archive
+            # First entry: original source file (file_name, file_size_bytes, checksum_sha256)
+            # Second entry: compressed archive (file_name, file_size_bytes, checksum_sha256)
+            if len(manifest.files) != 2:
                 raise ManifestValidationError(
-                    f"Expected 1 file entry in manifest, got {len(manifest.files)}"
+                    f"Expected 2 file entries in manifest (source + archive), got {len(manifest.files)}"
                 )
 
-            expected_checksum = manifest.files[0].checksum_sha256
+            # Archive is the second entry - use its checksum for validation
+            archive_entry = manifest.files[1]
+            expected_checksum = archive_entry.checksum_sha256
+            
             if archive_checksum != expected_checksum:
                 error_msg = (
                     f"Archive checksum mismatch: "

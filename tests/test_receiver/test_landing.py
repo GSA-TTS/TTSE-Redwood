@@ -51,7 +51,12 @@ def sample_archive():
 
 @pytest.fixture
 def sample_manifest(sample_archive):
-    """Create a sample manifest for testing."""
+    """Create a sample manifest for testing.
+    
+    Manifest now includes 2 file entries:
+    1. Source file (file_name, file_size_bytes, checksum_sha256)
+    2. Archive file (zip_file_name, zip_file_size_bytes, checksum_sha256)
+    """
     archive_checksum = hashlib.sha256(sample_archive).hexdigest()
     return {
         "manifest_version": "1.0",
@@ -60,13 +65,18 @@ def sample_manifest(sample_archive):
         "receiver_agency": "gsa",
         "created_at": "2026-04-06T10:00:00Z",
         "checksum_algorithm": "sha256",
-        "total_file_count": 1,
+        "total_file_count": 2,
         "compression_type": "gzip",
         "transfer_date": "2026-04-06",
         "files": [
             {
-                "file_name": "transfer.tar.gz",
-                "file_size_bytes": len(sample_archive),
+                "file_name": "sample_data.csv",
+                "file_size_bytes": 1024,
+                "checksum_sha256": "a" * 64,
+            },
+            {
+                "zip_file_name": "transfer.tar.gz",
+                "zip_file_size_bytes": len(sample_archive),
                 "checksum_sha256": archive_checksum,
             }
         ],
@@ -158,8 +168,8 @@ class TestReceiverLandingZoneValidate:
         self, receiver_landing_zone, sample_archive, sample_manifest
     ):
         """Test validation fails when archive checksum doesn't match manifest."""
-        # Corrupt the manifest checksum
-        sample_manifest["files"][0]["checksum_sha256"] = (
+        # Corrupt the archive entry (files[1]) checksum
+        sample_manifest["files"][1]["checksum_sha256"] = (
             "0" * 64  # Invalid checksum
         )
 
@@ -188,8 +198,8 @@ class TestReceiverLandingZoneValidate:
     def test_validate_manifest_wrong_file_count(
         self, receiver_landing_zone, sample_archive, sample_manifest
     ):
-        """Test validation fails when file count doesn't match."""
-        # Add extra file entry
+        """Test validation fails when file count doesn't match (expected 2: source + archive)."""
+        # Add extra file entry (3 files when 2 are expected)
         sample_manifest["files"].append(
             {
                 "file_name": "extra.txt",
@@ -197,9 +207,9 @@ class TestReceiverLandingZoneValidate:
                 "checksum_sha256": "0" * 64,
             }
         )
-        sample_manifest["total_file_count"] = 2
+        sample_manifest["total_file_count"] = 3
 
-        with pytest.raises(ManifestValidationError):
+        with pytest.raises(ManifestValidationError, match="Expected 2 file entries"):
             receiver_landing_zone.validate_manifest(
                 manifest_dict=sample_manifest,
                 archive_bytes=sample_archive,

@@ -409,11 +409,25 @@ def _prepare_sender_data_file(config: AgentConfig, working_dir: Path) -> tuple[P
 
 
 def _write_sender_manifest_output(manifest: TransferManifest, manifest_path: Path) -> None:
-    """Write the generated sender manifest to an output path."""
+    """Write the generated sender manifest to an output path.
+    
+    Customizes field names:
+    - Source file: file_name, file_size_bytes, checksum_sha256
+    - Archive file: zip_file_name, zip_file_size_bytes, checksum_sha256
+    """
     try:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_dict = manifest.model_dump(mode="json")
+        
+        # Rename archive file fields for clarity
+        if len(manifest_dict.get("files", [])) > 1:
+            archive_entry = manifest_dict["files"][1]
+            # Rename to indicate this is the compressed archive
+            archive_entry["zip_file_name"] = archive_entry.pop("file_name")
+            archive_entry["zip_file_size_bytes"] = archive_entry.pop("file_size_bytes")
+        
         with manifest_path.open("w", encoding="utf-8") as file_obj:
-            json.dump(manifest.model_dump(mode="json"), file_obj, indent=2)
+            json.dump(manifest_dict, file_obj, indent=2)
     except OSError as exc:
         raise StorageError(f"Failed to write sender manifest file {manifest_path}: {exc}") from exc
 
@@ -654,9 +668,15 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 },
             )
 
+            # Include both source file(s) and the archive in manifest
             manifest_files = [
                 ManifestFile(
-                    file_name=archive_path.name,
+                    file_name=file_name,  # Original source file
+                    file_size_bytes=staged_file.stat().st_size,
+                    checksum_sha256=_compute_checksum(staged_file, DEFAULT_CHECKSUM_ALGORITHM),
+                ),
+                ManifestFile(
+                    file_name=archive_path.name,  # Compressed archive
                     file_size_bytes=archive_path.stat().st_size,
                     checksum_sha256=_compute_checksum(archive_path, DEFAULT_CHECKSUM_ALGORITHM),
                 ),
