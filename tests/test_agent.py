@@ -357,6 +357,7 @@ class TestReceiverWorkflow:
                 mock_store = MagicMock()
                 mock_landing_cls.return_value = mock_landing
                 mock_store_cls.return_value = mock_store
+                mock_store.is_transfer_already_stored.return_value = False
                 self._setup_mock_landing(mock_landing)
                 mock_store.store_to_target.return_value = {
                     "status": "stored", "file_count": 1,
@@ -391,6 +392,7 @@ class TestReceiverWorkflow:
                 mock_store = MagicMock()
                 mock_landing_cls.return_value = mock_landing
                 mock_store_cls.return_value = mock_store
+                mock_store.is_transfer_already_stored.return_value = False
 
                 mock_landing.list_sender_agencies.return_value = ["dot", "hud"]
                 mock_landing.list_pending_transfers.side_effect = lambda sa: [f"{sa}-sess-001"]
@@ -421,6 +423,7 @@ class TestReceiverWorkflow:
                 mock_store = MagicMock()
                 mock_landing_cls.return_value = mock_landing
                 mock_store_cls.return_value = mock_store
+                mock_store.is_transfer_already_stored.side_effect = lambda *_: False
 
                 mock_landing.list_sender_agencies.return_value = ["dot"]
                 mock_landing.list_pending_transfers.return_value = ["sess-ok", "sess-bad"]
@@ -454,6 +457,7 @@ class TestReceiverWorkflow:
                         mock_store = MagicMock()
                         mock_landing_cls.return_value = mock_landing
                         mock_store_cls.return_value = mock_store
+                        mock_store.is_transfer_already_stored.return_value = False
                         self._setup_mock_landing(mock_landing)
                         mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
 
@@ -474,6 +478,7 @@ class TestReceiverWorkflow:
                         mock_store = MagicMock()
                         mock_landing_cls.return_value = mock_landing
                         mock_store_cls.return_value = mock_store
+                        mock_store.is_transfer_already_stored.return_value = False
                         self._setup_mock_landing(mock_landing)
                         mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
 
@@ -497,9 +502,12 @@ class TestReceiverWorkflow:
         config = self._make_config()
 
         with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
-            with patch("redwood_dataagent.agent.ReceiverTargetStore"):
+            with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
                 mock_landing = MagicMock()
+                mock_store = MagicMock()
                 mock_landing_cls.return_value = mock_landing
+                mock_store_cls.return_value = mock_store
+                mock_store.is_transfer_already_stored.return_value = False
                 mock_landing.list_sender_agencies.return_value = ["dot"]
                 mock_landing.list_pending_transfers.return_value = ["session-456"]
                 mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
@@ -511,6 +519,24 @@ class TestReceiverWorkflow:
                 mock_landing.validate_manifest.return_value = bad_manifest
 
                 assert _create_receiver_workflow(config) == 1
+
+    def test_receiver_workflow_all_transfers_already_done_exits_cleanly(self) -> None:
+        """Receiver exits cleanly when every discovered transfer is already marked done."""
+        config = self._make_config()
+
+        with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+            with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                mock_landing = MagicMock()
+                mock_store = MagicMock()
+                mock_landing_cls.return_value = mock_landing
+                mock_store_cls.return_value = mock_store
+
+                mock_landing.list_sender_agencies.return_value = ["dot"]
+                mock_landing.list_pending_transfers.return_value = ["sess-001"]
+                mock_store.is_transfer_already_stored.return_value = True
+
+                assert _create_receiver_workflow(config) == 0
+                mock_landing.fetch_from_landing_bucket.assert_not_called()
 
 
 class TestRunAgent:

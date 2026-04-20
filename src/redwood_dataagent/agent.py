@@ -1036,6 +1036,7 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
         )
 
         processed = 0
+        skipped = 0
         failed = 0
         for sender_agency in sender_agencies:
             transfer_sessions = _retry_operation(
@@ -1043,6 +1044,20 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 lambda sa=sender_agency: landing_zone.list_pending_transfers(sa),
             )
             for transfer_session_id in transfer_sessions:
+                # Pre-check target idempotency marker so already-complete transfers
+                # are not fetched/validated/decompressed again.
+                if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
+                    skipped += 1
+                    LOGGER.info(
+                        f"Transfer {transfer_session_id} already marked done in target; skipping.",
+                        extra={
+                            "event": "receiver_transfer_skip_done",
+                            "sender_agency": sender_agency,
+                            "transfer_session_id": transfer_session_id,
+                        },
+                    )
+                    continue
+
                 LOGGER.info(
                     f"Processing transfer: {sender_agency}/{transfer_session_id}",
                     extra={
@@ -1059,9 +1074,24 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 else:
                     failed += 1
 
+        if processed == 0 and failed == 0:
+            LOGGER.info(
+                "No new files to process. Exiting receiver workflow (idempotent).",
+                extra={
+                    "event": "receiver_no_new_files",
+                    "skipped": skipped,
+                    "bucket": config.receiver_landing_bucket,
+                },
+            )
+
         LOGGER.info(
-            f"Receiver scan complete: {processed} processed, {failed} failed",
-            extra={"event": "receiver_scan_complete", "processed": processed, "failed": failed},
+            f"Receiver scan complete: {processed} processed, {skipped} skipped, {failed} failed",
+            extra={
+                "event": "receiver_scan_complete",
+                "processed": processed,
+                "skipped": skipped,
+                "failed": failed,
+            },
         )
 
         outcome = EventOutcome.SUCCESS if failed == 0 else EventOutcome.FAILURE
@@ -1070,7 +1100,7 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             sender_agency="",
             receiver_agency=config.receiver_agency,
             outcome=outcome,
-            details={"processed": processed, "failed": failed},
+            details={"processed": processed, "skipped": skipped, "failed": failed},
         )
 
         return 0 if failed == 0 else 1

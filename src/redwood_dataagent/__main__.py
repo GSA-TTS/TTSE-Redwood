@@ -69,10 +69,15 @@ def main() -> int:
                 # This enables correlation of all logs for this transfer across the entire pipeline
                 set_transfer_session_id(config.transfer_session_id)
 
+                logger.info(
+                    f"Agent_Mode: {config.agent_mode.capitalize()}",
+                    extra={"event": "agent_mode_start", "agent_mode": config.agent_mode},
+                )
+
                 # Execute agent with fully configured context
                 logger.info(
                     "Executing agent workflow",
-                    extra={"event": "workflow_start"},
+                    extra={"event": "workflow_start", "agent_mode": config.agent_mode},
                 )
                 result = run_agent(config)
                 
