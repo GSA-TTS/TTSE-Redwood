@@ -19,7 +19,10 @@ from typing import Optional
 from redwood_dataagent.audit.events import AuditEventType, EventOutcome
 from redwood_dataagent.audit.logger import log_event
 from redwood_dataagent.exceptions import ManifestValidationError, StorageError
-from redwood_dataagent.models.manifest import TransferManifest
+from redwood_dataagent.models.manifest import (
+    TransferManifest,
+    normalize_archive_fields_to_standard,
+)
 from redwood_dataagent.storage.conventions import ReceiverStoragePath
 from redwood_dataagent.aws.s3 import S3Client
 
@@ -234,18 +237,10 @@ class ReceiverLandingZone:
             ManifestValidationError: If manifest is invalid or checksum mismatches
         """
         try:
-            # Convert renamed archive fields back to standard format for Pydantic model
-            # The sender writes zip_file_name and zip_file_size_bytes for the archive entry
-            # but Pydantic expects file_name and file_size_bytes
-            manifest_dict_normalized = dict(manifest_dict)
-            if "files" in manifest_dict_normalized and len(manifest_dict_normalized["files"]) > 1:
-                archive_entry = manifest_dict_normalized["files"][1]
-                # Convert renamed fields back to standard names
-                if "zip_file_name" in archive_entry:
-                    archive_entry["file_name"] = archive_entry.pop("zip_file_name")
-                if "zip_file_size_bytes" in archive_entry:
-                    archive_entry["file_size_bytes"] = archive_entry.pop("zip_file_size_bytes")
-            
+            # Normalize archive fields from zip_* names back to standard names
+            # before model validation
+            manifest_dict_normalized = normalize_archive_fields_to_standard(manifest_dict)
+
             # Parse and validate manifest structure
             manifest = TransferManifest(**manifest_dict_normalized)
 

@@ -39,7 +39,13 @@ from .exceptions import (
     StorageError,
 )
 from .logging_utils import get_logger
-from .models.manifest import ChecksumAlgorithm, CompressionType, ManifestFile, TransferManifest
+from .models.manifest import (
+    ChecksumAlgorithm,
+    CompressionType,
+    ManifestFile,
+    TransferManifest,
+    apply_archive_field_naming,
+)
 from .policy import PolicyApprover
 from .receiver.landing import ReceiverLandingZone
 from .receiver.store import ReceiverTargetStore
@@ -410,22 +416,17 @@ def _prepare_sender_data_file(config: AgentConfig, working_dir: Path) -> tuple[P
 
 def _write_sender_manifest_output(manifest: TransferManifest, manifest_path: Path) -> None:
     """Write the generated sender manifest to an output path.
-    
-    Customizes field names:
+
+    Applied field naming:
     - Source file: file_name, file_size_bytes, checksum_sha256
     - Archive file: zip_file_name, zip_file_size_bytes, checksum_sha256
     """
     try:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_dict = manifest.model_dump(mode="json")
-        
-        # Rename archive file fields for clarity
-        if len(manifest_dict.get("files", [])) > 1:
-            archive_entry = manifest_dict["files"][1]
-            # Rename to indicate this is the compressed archive
-            archive_entry["zip_file_name"] = archive_entry.pop("file_name")
-            archive_entry["zip_file_size_bytes"] = archive_entry.pop("file_size_bytes")
-        
+        # Rename archive fields for clarity before writing
+        manifest_dict = apply_archive_field_naming(manifest_dict)
+
         with manifest_path.open("w", encoding="utf-8") as file_obj:
             json.dump(manifest_dict, file_obj, indent=2)
     except OSError as exc:
