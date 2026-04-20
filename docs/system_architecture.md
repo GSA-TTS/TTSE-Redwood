@@ -1,6 +1,6 @@
 ### Architecture Diagram: Controlled Data Sharing System
 
-<img width="960" height="720" alt="Redwood System Architecture" src="https://github.com/user-attachments/assets/e43fe749-0d4d-421c-a814-b293236e5b2c" />
+<img width="960" height="720" alt="Redwood System Architecture" src="https://github.com/user-attachments/assets/ad1891b8-6925-4ffa-bb9e-0674adca18dc" />
 
 
 ### Component Descriptions
