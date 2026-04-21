@@ -423,7 +423,7 @@ class TestReceiverWorkflow:
                 mock_store = MagicMock()
                 mock_landing_cls.return_value = mock_landing
                 mock_store_cls.return_value = mock_store
-                mock_store.is_transfer_already_stored.side_effect = lambda *_: False
+                mock_store.is_transfer_already_stored.return_value = False
 
                 mock_landing.list_sender_agencies.return_value = ["dot"]
                 mock_landing.list_pending_transfers.return_value = ["sess-ok", "sess-bad"]
