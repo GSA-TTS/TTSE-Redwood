@@ -79,7 +79,7 @@ class ReceiverLandingZone:
             )
             prefixes = response.get("CommonPrefixes", [])
             agencies = [p["Prefix"].rstrip("/") for p in prefixes]
-            _logger.info(
+            _logger.debug(
                 f"Found {len(agencies)} sender agency folder(s) in landing bucket: {agencies}"
             )
             return agencies
@@ -113,7 +113,7 @@ class ReceiverLandingZone:
             prefixes = response.get("CommonPrefixes", [])
             # "dot/sess-001/" → "sess-001"
             sessions = [p["Prefix"].rstrip("/").split("/")[-1] for p in prefixes]
-            _logger.info(
+            _logger.debug(
                 f"Found {len(sessions)} transfer session(s) for sender {sender_agency}: {sessions}"
             )
             return sessions

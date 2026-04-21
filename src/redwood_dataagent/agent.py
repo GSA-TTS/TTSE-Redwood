@@ -38,7 +38,7 @@ from .exceptions import (
     ConfigurationError,
     StorageError,
 )
-from .logging_utils import get_logger
+from .logging_utils import get_logger, logging_context, prefix_log_message
 from .models.manifest import (
     ChecksumAlgorithm,
     CompressionType,
@@ -76,7 +76,7 @@ def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: 
             last_error = exc
             if attempt < attempts:
                 LOGGER.warning(
-                    "Retrying operation after failure",
+                    prefix_log_message("Retrying operation after failure"),
                     extra={
                         "event": "operation_retry",
                         "operation": operation_name,
@@ -226,7 +226,7 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
             Key=marker_key,
             Body=json.dumps(marker_metadata).encode("utf-8"),
         )
-        LOGGER.info(f"Marked file as processed: {marker_key}")
+        LOGGER.info(prefix_log_message(f"Marked file as processed: {marker_key}"))
     except Exception as e:
         raise StorageError(f"Failed to mark file as processed: {e}") from e
 
@@ -500,14 +500,22 @@ def _create_sender_workflow(config: AgentConfig) -> int:
     try:
         if not config.sender_data_directory:
             LOGGER.warning(
-                "Sender data directory not configured. "
-                "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/incoming/)"
+                prefix_log_message(
+                    "Sender data directory not configured. "
+                    "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/incoming/)",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                )
             )
             return 0
 
         # Scan directory for new files
         LOGGER.info(
-            "Scanning sender directory for new files",
+            prefix_log_message(
+                "Scanning sender directory for new files",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
             extra={"event": "sender_scan_start", "directory": config.sender_data_directory},
         )
         files_to_process = _retry_operation(
@@ -517,13 +525,21 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
         if not files_to_process:
             LOGGER.info(
-                "No new file read. Exiting sender workflow (idempotent).",
+                prefix_log_message(
+                    "No new file read. Exiting sender workflow (idempotent).",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
                 extra={"event": "sender_no_files", "directory": config.sender_data_directory},
             )
             return 0
 
         LOGGER.info(
-            f"Found {len(files_to_process)} file(s) to process in sender directory",
+            prefix_log_message(
+                f"Found {len(files_to_process)} file(s) to process in sender directory",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
             extra={"event": "sender_files_found", "file_count": len(files_to_process)},
         )
 
@@ -531,7 +547,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
         s3_path, file_name = files_to_process[0]
         
         LOGGER.info(
-            f"Processing file: {file_name}",
+            prefix_log_message(
+                f"Processing file: {file_name}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
             extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
         )
 
@@ -597,7 +617,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 raise StorageError(f"Failed to download {s3_path}: {e}") from e
 
             LOGGER.info(
-                f"File read successfully: {file_name}",
+                prefix_log_message(
+                    f"File read successfully: {file_name}",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
                 extra={
                     "event": "sender_file_read",
                     "file_name": file_name,
@@ -764,7 +788,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
                 total_uploaded_bytes += artifact_path.stat().st_size
                 LOGGER.info(
-                    f"Staged artifact to S3: {artifact_path.name}",
+                    prefix_log_message(
+                        f"Staged artifact to S3: {artifact_path.name}",
+                        agent_mode=config.agent_mode,
+                        transfer_session_id=config.transfer_session_id,
+                    ),
                     extra={
                         "event": "sender_artifact_staged",
                         "bucket": config.sender_staging_bucket,
@@ -792,7 +820,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 lambda: _mark_file_processed(file_name, config.sender_data_directory, config.aws_region),
             )
             LOGGER.info(
-                f"File marked as processed and moved to processed folder: {file_name}",
+                prefix_log_message(
+                    f"File marked as processed and moved to processed folder: {file_name}",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
                 extra={
                     "event": "sender_file_marked",
                     "file_name": file_name,
@@ -801,7 +833,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             )
 
             LOGGER.info(
-                "Sender workflow complete",
+                prefix_log_message(
+                    "Sender workflow complete",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
                 extra={
                     "event": "sender_complete",
                     "session_id": config.transfer_session_id,
@@ -831,7 +867,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
     except Exception as e:
         LOGGER.error(
-            f"Sender workflow failed: {e}",
+            prefix_log_message(
+                f"Sender workflow failed: {e}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
             extra={"event": "sender_error", "error_type": type(e).__name__},
         )
         log_pipeline_complete(
@@ -971,7 +1011,11 @@ def _process_single_receiver_transfer(
 
     except Exception as e:
         LOGGER.error(
-            f"Transfer {transfer_session_id} from {sender_agency} failed: {e}",
+            prefix_log_message(
+                f"Transfer from {sender_agency} failed: {e}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=transfer_session_id,
+            ),
             extra={
                 "event": "receiver_transfer_error",
                 "sender_agency": sender_agency,
@@ -1019,7 +1063,11 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
 
         if not sender_agencies:
             LOGGER.info(
-                "No sender agency folders found in landing bucket — nothing to process.",
+                prefix_log_message(
+                    "No sender agency folders found in landing bucket; nothing to process.",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
                 extra={"event": "receiver_no_senders", "bucket": config.receiver_landing_bucket},
             )
             log_pipeline_complete(
@@ -1030,8 +1078,12 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             )
             return 0
 
-        LOGGER.info(
-            f"Found {len(sender_agencies)} sender agency folder(s): {sender_agencies}",
+        LOGGER.debug(
+            prefix_log_message(
+                f"Found {len(sender_agencies)} sender agency folder(s): {sender_agencies}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
             extra={"event": "receiver_senders_found", "sender_agencies": sender_agencies},
         )
 
@@ -1044,55 +1096,70 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 lambda sa=sender_agency: landing_zone.list_pending_transfers(sa),
             )
             for transfer_session_id in transfer_sessions:
-                # Pre-check target idempotency marker so already-complete transfers
-                # are not fetched/validated/decompressed again.
-                if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
-                    skipped += 1
+                with logging_context(transfer_session_id):
+                    # Pre-check target idempotency marker so already-complete transfers
+                    # are not fetched/validated/decompressed again.
+                    if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
+                        skipped += 1
+                        LOGGER.debug(
+                            prefix_log_message(
+                                f"Transfer from {sender_agency} already marked done in target; skipping.",
+                                agent_mode=config.agent_mode,
+                            ),
+                            extra={
+                                "event": "receiver_transfer_skip_done",
+                                "sender_agency": sender_agency,
+                                "transfer_session_id": transfer_session_id,
+                            },
+                        )
+                        continue
+
                     LOGGER.info(
-                        f"Transfer {transfer_session_id} already marked done in target; skipping.",
+                        prefix_log_message(
+                            f"Processing transfer from {sender_agency}",
+                            agent_mode=config.agent_mode,
+                        ),
                         extra={
-                            "event": "receiver_transfer_skip_done",
+                            "event": "receiver_transfer_start",
                             "sender_agency": sender_agency,
                             "transfer_session_id": transfer_session_id,
                         },
                     )
-                    continue
-
-                LOGGER.info(
-                    f"Processing transfer: {sender_agency}/{transfer_session_id}",
-                    extra={
-                        "event": "receiver_transfer_start",
-                        "sender_agency": sender_agency,
-                        "transfer_session_id": transfer_session_id,
-                    },
-                )
-                result = _process_single_receiver_transfer(
-                    landing_zone, target_store, config, sender_agency, transfer_session_id
-                )
-                if result == 0:
-                    processed += 1
-                else:
-                    failed += 1
+                    result = _process_single_receiver_transfer(
+                        landing_zone, target_store, config, sender_agency, transfer_session_id
+                    )
+                    if result == 0:
+                        processed += 1
+                    else:
+                        failed += 1
 
         if processed == 0 and failed == 0:
             LOGGER.info(
-                "No new files to process. Exiting receiver workflow (idempotent).",
+                prefix_log_message(
+                    "No new files to process. Exiting receiver workflow (idempotent).",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
                 extra={
                     "event": "receiver_no_new_files",
                     "skipped": skipped,
                     "bucket": config.receiver_landing_bucket,
                 },
             )
-
-        LOGGER.info(
-            f"Receiver scan complete: {processed} processed, {skipped} skipped, {failed} failed",
-            extra={
-                "event": "receiver_scan_complete",
-                "processed": processed,
-                "skipped": skipped,
-                "failed": failed,
-            },
-        )
+        else:
+            LOGGER.info(
+                prefix_log_message(
+                    f"Receiver scan complete: {processed} processed, {skipped} skipped, {failed} failed",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
+                extra={
+                    "event": "receiver_scan_complete",
+                    "processed": processed,
+                    "skipped": skipped,
+                    "failed": failed,
+                },
+            )
 
         outcome = EventOutcome.SUCCESS if failed == 0 else EventOutcome.FAILURE
         log_pipeline_complete(
@@ -1107,7 +1174,11 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
 
     except Exception as e:
         LOGGER.error(
-            f"Receiver workflow failed: {e}",
+            prefix_log_message(
+                f"Receiver workflow failed: {e}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
             extra={"event": "receiver_error", "error_type": type(e).__name__},
         )
         log_pipeline_complete(

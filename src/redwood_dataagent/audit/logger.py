@@ -51,7 +51,11 @@ from redwood_dataagent.audit.events import (
     AuditEventType,
     EventOutcome,
 )
-from redwood_dataagent.logging_utils import get_logger, get_transfer_session_id
+from redwood_dataagent.logging_utils import (
+    get_logger,
+    get_transfer_session_id,
+    prefix_log_message,
+)
 
 # Module logger for audit event emission
 _logger = get_logger(__name__)
@@ -123,7 +127,10 @@ def log_event(
     # and convert the event to structured log format
     log_entry = event.to_structured_log()
     _logger.info(
-        f"{event_type.value}: {outcome.value}",
+        prefix_log_message(
+            f"{event_type.value}: {outcome.value}",
+            transfer_session_id=transfer_session_id,
+        ),
         extra={"event_data": log_entry},
     )
 

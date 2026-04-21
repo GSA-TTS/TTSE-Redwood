@@ -33,6 +33,7 @@ from redwood_dataagent.audit.logger import (
     log_store_data,
     log_pipeline_complete,
 )
+from redwood_dataagent.logging_utils import set_agent_mode
 
 
 class TestCoreLogEvent:
@@ -164,6 +165,23 @@ class TestCoreLogEvent:
                 bytes_transferred=-1,  # Invalid: negative
                 destination_host="sftp.example.com",
             )
+
+    def test_log_event_prefixes_message_with_agent_mode_and_transfer_id(self):
+        """Readable audit message includes agent mode and transfer ID context."""
+        set_agent_mode("receiver")
+
+        with patch("redwood_dataagent.audit.logger._logger") as mock_logger:
+            log_event(
+                event_type=AuditEventType.PIPELINE_START,
+                transfer_session_id="transfer-001",
+                sender_agency="dot",
+                receiver_agency="gsa",
+                stage="sender",
+            )
+
+        mock_logger.info.assert_called_once()
+        assert mock_logger.info.call_args.args[0] == "[receiver][transfer-001] pipeline_start: success"
+        set_agent_mode(None)
 
 
 class TestPipelineStartHelper:

@@ -8,10 +8,14 @@ import pytest
 
 from redwood_dataagent.logging_utils import (
     JsonFormatter,
+    _agent_mode,
     configure_logging,
+    get_agent_mode,
     get_logger,
     get_transfer_session_id,
     logging_context,
+    prefix_log_message,
+    set_agent_mode,
     set_transfer_session_id,
     _transfer_session_id,
 )
@@ -23,6 +27,7 @@ def reset_context():
     yield
     # After each test, reset the context variable to None for test isolation
     # This prevents test cross-contamination via shared contextvars state
+    _agent_mode.set(None)
     _transfer_session_id.set(None)
 
 
@@ -70,6 +75,26 @@ class TestJsonFormatter:
 
         # This verifies session ID is auto-injected from context
         assert payload["transfer_session_id"] == "session-123"
+
+    def test_format_includes_agent_mode_from_context(self):
+        """agent_mode from context is included in output."""
+        set_agent_mode("receiver")
+
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="test with mode",
+            args=(),
+            exc_info=None,
+        )
+
+        formatter = JsonFormatter()
+        formatted = formatter.format(record)
+        payload = json.loads(formatted)
+
+        assert payload["agent_mode"] == "receiver"
 
     def test_format_excludes_session_id_when_not_set(self):
         """transfer_session_id is excluded from output when not set."""
@@ -163,6 +188,11 @@ class TestTransferSessionIdContext:
         set_transfer_session_id("session-abc")
         assert get_transfer_session_id() == "session-abc"
 
+    def test_set_and_get_agent_mode(self):
+        """set_agent_mode stores value in context."""
+        set_agent_mode("sender")
+        assert get_agent_mode() == "sender"
+
     def test_set_multiple_session_ids_overwrites(self):
         """Setting session ID multiple times overwrites previous value."""
         set_transfer_session_id("session-1")
@@ -242,6 +272,31 @@ class TestLoggingContext:
 
         # Should be back to None or unset
         assert get_transfer_session_id() is None
+
+
+class TestPrefixLogMessage:
+    """prefix_log_message helper tests."""
+
+    def test_prefix_log_message_uses_context(self):
+        """Prefix helper uses current context when explicit values are absent."""
+        set_agent_mode("receiver")
+        set_transfer_session_id("session-123")
+
+        assert (
+            prefix_log_message("Processing transfer")
+            == "[receiver][session-123] Processing transfer"
+        )
+
+    def test_prefix_log_message_accepts_explicit_values(self):
+        """Prefix helper supports explicit values without relying on context."""
+        assert (
+            prefix_log_message(
+                "Executing agent workflow",
+                agent_mode="sender",
+                transfer_session_id="session-456",
+            )
+            == "[sender][session-456] Executing agent workflow"
+        )
 
 
 class TestGetLogger:

@@ -9,7 +9,13 @@ import traceback
 
 from .agent import run_agent
 from .config import load_config
-from .logging_utils import configure_logging, set_transfer_session_id, get_logger
+from .logging_utils import (
+    configure_logging,
+    get_logger,
+    prefix_log_message,
+    set_agent_mode,
+    set_transfer_session_id,
+)
 
 
 def main() -> int:
@@ -35,7 +41,10 @@ def main() -> int:
         logger = get_logger("redwood_dataagent")
         
         logger.info(
-            "Redwood Data Agent initializing",
+            prefix_log_message(
+                "Redwood Data Agent initializing",
+                agent_mode=initial_config.agent_mode,
+            ),
             extra={
                 "event": "agent_start",
                 "agent_mode": initial_config.agent_mode,
@@ -45,8 +54,15 @@ def main() -> int:
 
         # Run agent on 5-minute scheduler loop for long-running stateless deployment
         logger.info(
-            "Starting 5-minute scheduler loop",
-            extra={"event": "scheduler_start", "interval_seconds": 300},
+            prefix_log_message(
+                "Starting 5-minute scheduler loop",
+                agent_mode=initial_config.agent_mode,
+            ),
+            extra={
+                "event": "scheduler_start",
+                "agent_mode": initial_config.agent_mode,
+                "interval_seconds": 300,
+            },
         )
         
         SCHEDULER_INTERVAL = 300  # 5 minutes in seconds
@@ -67,35 +83,51 @@ def main() -> int:
 
                 # Inject transfer session ID into logging context (all logs will auto-include this)
                 # This enables correlation of all logs for this transfer across the entire pipeline
+                set_agent_mode(config.agent_mode)
                 set_transfer_session_id(config.transfer_session_id)
 
                 logger.info(
-                    f"Agent_Mode: {config.agent_mode.capitalize()}",
-                    extra={"event": "agent_mode_start", "agent_mode": config.agent_mode},
-                )
-
-                # Execute agent with fully configured context
-                logger.info(
-                    "Executing agent workflow",
+                    prefix_log_message(
+                        "Executing agent workflow",
+                        agent_mode=config.agent_mode,
+                        transfer_session_id=config.transfer_session_id,
+                    ),
                     extra={"event": "workflow_start", "agent_mode": config.agent_mode},
                 )
                 result = run_agent(config)
                 
                 if result == 0:
                     logger.info(
-                        f"Agent workflow completed, sleeping {SCHEDULER_INTERVAL}s until next run",
-                        extra={"event": "agent_sleep", "sleep_seconds": SCHEDULER_INTERVAL},
+                        prefix_log_message(
+                            f"Agent workflow completed, sleeping {SCHEDULER_INTERVAL}s until next run",
+                            agent_mode=config.agent_mode,
+                            transfer_session_id=config.transfer_session_id,
+                        ),
+                        extra={
+                            "event": "agent_sleep",
+                            "agent_mode": config.agent_mode,
+                            "sleep_seconds": SCHEDULER_INTERVAL,
+                        },
                     )
                 else:
                     logger.error(
-                        f"Agent workflow failed with exit code {result}, sleeping {SCHEDULER_INTERVAL}s until retry",
-                        extra={"event": "agent_failure", "exit_code": result, "sleep_seconds": SCHEDULER_INTERVAL},
+                        prefix_log_message(
+                            f"Agent workflow failed with exit code {result}, sleeping {SCHEDULER_INTERVAL}s until retry",
+                            agent_mode=config.agent_mode,
+                            transfer_session_id=config.transfer_session_id,
+                        ),
+                        extra={
+                            "event": "agent_failure",
+                            "agent_mode": config.agent_mode,
+                            "exit_code": result,
+                            "sleep_seconds": SCHEDULER_INTERVAL,
+                        },
                     )
                 
                 # Sleep until next scheduled run
                 time.sleep(SCHEDULER_INTERVAL)
         except KeyboardInterrupt:
-            logger.info("Scheduler loop terminated, agent shutting down")
+            logger.info(prefix_log_message("Scheduler loop terminated, agent shutting down"))
             return 0
         
     except Exception as e:

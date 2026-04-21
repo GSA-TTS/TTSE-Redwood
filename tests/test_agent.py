@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,7 @@ from redwood_dataagent.agent import (
 )
 from redwood_dataagent.config import AgentConfig
 from redwood_dataagent.exceptions import StorageError
+from redwood_dataagent.logging_utils import set_agent_mode, set_transfer_session_id
 from redwood_dataagent.models.manifest import ChecksumAlgorithm
 
 
@@ -537,6 +539,68 @@ class TestReceiverWorkflow:
 
                 assert _create_receiver_workflow(config) == 0
                 mock_landing.fetch_from_landing_bucket.assert_not_called()
+
+    def test_receiver_workflow_skip_only_logs_idempotent_summary(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Skip-only receiver runs keep INFO logs to the idempotent summary."""
+        config = self._make_config()
+
+        with patch("redwood_dataagent.agent.log_pipeline_start"):
+            with patch("redwood_dataagent.agent.log_pipeline_complete"):
+                with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+                    with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                        mock_landing = MagicMock()
+                        mock_store = MagicMock()
+                        mock_landing_cls.return_value = mock_landing
+                        mock_store_cls.return_value = mock_store
+
+                        mock_landing.list_sender_agencies.return_value = ["dot"]
+                        mock_landing.list_pending_transfers.return_value = ["sess-001"]
+                        mock_store.is_transfer_already_stored.return_value = True
+
+                        with caplog.at_level(logging.INFO, logger="redwood_dataagent"):
+                            assert _create_receiver_workflow(config) == 0
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("No new files to process. Exiting receiver workflow (idempotent)." in message for message in messages)
+        assert not any("already marked done in target" in message for message in messages)
+        assert not any("Found 1 transfer session(s)" in message for message in messages)
+        assert not any("Receiver scan complete:" in message for message in messages)
+
+    def test_receiver_workflow_processing_log_includes_mode_and_transfer_id(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Per-transfer receiver processing log carries mode and transfer context."""
+        config = self._make_config(transfer_session_id="run-session")
+        set_agent_mode("receiver")
+        set_transfer_session_id(config.transfer_session_id)
+
+        with patch("redwood_dataagent.agent.log_pipeline_start"):
+            with patch("redwood_dataagent.agent.log_pipeline_complete"):
+                with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+                    with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                        mock_landing = MagicMock()
+                        mock_store = MagicMock()
+                        mock_landing_cls.return_value = mock_landing
+                        mock_store_cls.return_value = mock_store
+                        mock_store.is_transfer_already_stored.return_value = False
+                        self._setup_mock_landing(mock_landing, session_id="sess-123")
+                        mock_store.store_to_target.return_value = {
+                            "status": "stored",
+                            "file_count": 1,
+                            "target_location": "s3://x/",
+                        }
+
+                        with caplog.at_level(logging.INFO, logger="redwood_dataagent"):
+                            assert _create_receiver_workflow(config) == 0
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            message == "[receiver][sess-123] Processing transfer from dot"
+            for message in messages
+        )
+        set_agent_mode(None)
+        set_transfer_session_id(None)
 
 
 class TestRunAgent:

@@ -14,14 +14,46 @@ from typing import Any, Generator, Optional
 _transfer_session_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "transfer_session_id", default=None
 )
+_agent_mode: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "agent_mode", default=None
+)
+
+_STANDARD_LOG_RECORD_FIELDS = {
+    "args",
+    "asctime",
+    "created",
+    "exc_info",
+    "exc_text",
+    "filename",
+    "funcName",
+    "levelname",
+    "levelno",
+    "lineno",
+    "module",
+    "msecs",
+    "message",
+    "msg",
+    "name",
+    "pathname",
+    "process",
+    "processName",
+    "relativeCreated",
+    "stack_info",
+    "thread",
+    "threadName",
+}
 
 __all__ = [
     "JsonFormatter",
     "configure_logging",
+    "set_agent_mode",
+    "get_agent_mode",
     "set_transfer_session_id",
     "get_transfer_session_id",
     "logging_context",
+    "prefix_log_message",
     "get_logger",
+    "_agent_mode",
     "_transfer_session_id",
 ]
 
@@ -44,6 +76,10 @@ class JsonFormatter(logging.Formatter):
         if session_id is not None:
             payload["transfer_session_id"] = session_id
 
+        agent_mode = _agent_mode.get()
+        if agent_mode is not None:
+            payload["agent_mode"] = agent_mode
+
         # Include custom event field if attached to record (e.g., "PIPELINE_START")
         # Events are optional and application-specific
         if hasattr(record, "event"):
@@ -54,8 +90,13 @@ class JsonFormatter(logging.Formatter):
         if hasattr(record, "extra"):
             payload.update(record.extra)
 
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_LOG_RECORD_FIELDS or key in payload or key == "extra":
+                continue
+            payload[key] = value
+
         # Output as sorted JSON for consistency and easy log parsing/searching
-        return json.dumps(payload, sort_keys=True)
+        return json.dumps(payload, sort_keys=True, default=str)
 
 
 def configure_logging(level: str) -> None:
@@ -77,7 +118,17 @@ def configure_logging(level: str) -> None:
     root_logger.addHandler(handler)
 
 
-def set_transfer_session_id(session_id: str) -> None:
+def set_agent_mode(agent_mode: Optional[str]) -> None:
+    """Set the current agent mode in context."""
+    _agent_mode.set(agent_mode)
+
+
+def get_agent_mode() -> Optional[str]:
+    """Get the current agent mode from context."""
+    return _agent_mode.get()
+
+
+def set_transfer_session_id(session_id: Optional[str]) -> None:
     """
     Set the current transfer session ID in context.
 
@@ -121,6 +172,29 @@ def logging_context(session_id: str) -> Generator[None, None, None]:
         # Reset to previous value (handles nested contexts correctly)
         # Even if exception occurs, previous context is restored
         _transfer_session_id.reset(token)
+
+
+def prefix_log_message(
+    message: str,
+    *,
+    agent_mode: Optional[str] = None,
+    transfer_session_id: Optional[str] = None,
+) -> str:
+    """Prefix a log message with agent mode and transfer session context."""
+    parts: list[str] = []
+
+    resolved_agent_mode = agent_mode or get_agent_mode()
+    resolved_session_id = transfer_session_id or get_transfer_session_id()
+
+    if resolved_agent_mode:
+        parts.append(f"[{resolved_agent_mode}]")
+    if resolved_session_id:
+        parts.append(f"[{resolved_session_id}]")
+
+    if not parts:
+        return message
+
+    return f"{''.join(parts)} {message}"
 
 
 def get_logger(name: str) -> logging.Logger:
