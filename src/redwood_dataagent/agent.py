@@ -555,20 +555,6 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
         )
 
-        log_extract_data(
-            transfer_session_id=config.transfer_session_id,
-            sender_agency=config.sender_agency,
-            receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.SUCCESS,
-            details={
-                "step": "detect",
-                "directory": config.sender_data_directory,
-                "file_count": len(files_to_process),
-                "selected_file": file_name,
-                "selected_path": s3_path,
-            },
-        )
-
         # 1. Log pipeline start
         log_pipeline_start(
             transfer_session_id=config.transfer_session_id,

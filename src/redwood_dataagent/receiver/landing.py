@@ -142,21 +142,6 @@ class ReceiverLandingZone:
             StorageError: If S3 download fails
         """
         try:
-            # Log fetch attempt
-            log_event(
-                event_type=AuditEventType.SFTP_TRANSFER_START,
-                transfer_session_id=transfer_session_id,
-                sender_agency=sender_agency,
-                receiver_agency=receiver_agency,
-                stage="receiver",
-                outcome=EventOutcome.SUCCESS,
-                details={
-                    "action": "landing_fetch_start",
-                    "bucket": self.landing_bucket,
-                    "transfer_session_id": transfer_session_id,
-                },
-            )
-
             # Construct S3 paths scoped by sender agency prefix.
             manifest_key = ReceiverStoragePath.landing(
                 transfer_session_id,
@@ -176,9 +161,9 @@ class ReceiverLandingZone:
             # Download archive
             archive_bytes = self._download_from_s3(archive_key, "transfer.tar.gz")
 
-            # Log successful fetch
+            # Log successful receiver fetch from landing storage.
             log_event(
-                event_type=AuditEventType.SFTP_TRANSFER_COMPLETE,
+                event_type=AuditEventType.EXTRACT_DATA,
                 transfer_session_id=transfer_session_id,
                 sender_agency=sender_agency,
                 receiver_agency=receiver_agency,
@@ -202,7 +187,7 @@ class ReceiverLandingZone:
 
             # Log failed fetch
             log_event(
-                event_type=AuditEventType.SFTP_TRANSFER_COMPLETE,
+                event_type=AuditEventType.EXTRACT_DATA,
                 transfer_session_id=transfer_session_id,
                 sender_agency=sender_agency,
                 receiver_agency=receiver_agency,
