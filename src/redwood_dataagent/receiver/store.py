@@ -176,6 +176,15 @@ class ReceiverTargetStore:
 
             raise StorageError(error_msg) from e
 
+    def is_transfer_already_stored(self, transfer_session_id: str, sender_agency: str) -> bool:
+        """Return whether a transfer has already been stored in target.
+
+        This is a lightweight pre-check used by the receiver workflow so it can
+        skip known-complete transfers before fetch/validate/decompress work.
+        """
+        marker_key = f"processed/{sender_agency}/{transfer_session_id}.done"
+        return self._is_already_stored(marker_key)
+
     def _is_already_stored(self, marker_key: str) -> bool:
         """Check if marker object exists (idempotency guard).
 

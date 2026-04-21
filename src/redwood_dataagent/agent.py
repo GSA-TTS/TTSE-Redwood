@@ -39,7 +39,13 @@ from .exceptions import (
     StorageError,
 )
 from .logging_utils import get_logger
-from .models.manifest import ChecksumAlgorithm, CompressionType, ManifestFile, TransferManifest
+from .models.manifest import (
+    ChecksumAlgorithm,
+    CompressionType,
+    ManifestFile,
+    TransferManifest,
+    apply_archive_field_naming,
+)
 from .policy import PolicyApprover
 from .receiver.landing import ReceiverLandingZone
 from .receiver.store import ReceiverTargetStore
@@ -410,22 +416,17 @@ def _prepare_sender_data_file(config: AgentConfig, working_dir: Path) -> tuple[P
 
 def _write_sender_manifest_output(manifest: TransferManifest, manifest_path: Path) -> None:
     """Write the generated sender manifest to an output path.
-    
-    Customizes field names:
+
+    Applied field naming:
     - Source file: file_name, file_size_bytes, checksum_sha256
     - Archive file: zip_file_name, zip_file_size_bytes, checksum_sha256
     """
     try:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_dict = manifest.model_dump(mode="json")
-        
-        # Rename archive file fields for clarity
-        if len(manifest_dict.get("files", [])) > 1:
-            archive_entry = manifest_dict["files"][1]
-            # Rename to indicate this is the compressed archive
-            archive_entry["zip_file_name"] = archive_entry.pop("file_name")
-            archive_entry["zip_file_size_bytes"] = archive_entry.pop("file_size_bytes")
-        
+        # Rename archive fields for clarity before writing
+        manifest_dict = apply_archive_field_naming(manifest_dict)
+
         with manifest_path.open("w", encoding="utf-8") as file_obj:
             json.dump(manifest_dict, file_obj, indent=2)
     except OSError as exc:
@@ -1035,6 +1036,7 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
         )
 
         processed = 0
+        skipped = 0
         failed = 0
         for sender_agency in sender_agencies:
             transfer_sessions = _retry_operation(
@@ -1042,6 +1044,20 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 lambda sa=sender_agency: landing_zone.list_pending_transfers(sa),
             )
             for transfer_session_id in transfer_sessions:
+                # Pre-check target idempotency marker so already-complete transfers
+                # are not fetched/validated/decompressed again.
+                if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
+                    skipped += 1
+                    LOGGER.info(
+                        f"Transfer {transfer_session_id} already marked done in target; skipping.",
+                        extra={
+                            "event": "receiver_transfer_skip_done",
+                            "sender_agency": sender_agency,
+                            "transfer_session_id": transfer_session_id,
+                        },
+                    )
+                    continue
+
                 LOGGER.info(
                     f"Processing transfer: {sender_agency}/{transfer_session_id}",
                     extra={
@@ -1058,9 +1074,24 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 else:
                     failed += 1
 
+        if processed == 0 and failed == 0:
+            LOGGER.info(
+                "No new files to process. Exiting receiver workflow (idempotent).",
+                extra={
+                    "event": "receiver_no_new_files",
+                    "skipped": skipped,
+                    "bucket": config.receiver_landing_bucket,
+                },
+            )
+
         LOGGER.info(
-            f"Receiver scan complete: {processed} processed, {failed} failed",
-            extra={"event": "receiver_scan_complete", "processed": processed, "failed": failed},
+            f"Receiver scan complete: {processed} processed, {skipped} skipped, {failed} failed",
+            extra={
+                "event": "receiver_scan_complete",
+                "processed": processed,
+                "skipped": skipped,
+                "failed": failed,
+            },
         )
 
         outcome = EventOutcome.SUCCESS if failed == 0 else EventOutcome.FAILURE
@@ -1069,7 +1100,7 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             sender_agency="",
             receiver_agency=config.receiver_agency,
             outcome=outcome,
-            details={"processed": processed, "failed": failed},
+            details={"processed": processed, "skipped": skipped, "failed": failed},
         )
 
         return 0 if failed == 0 else 1

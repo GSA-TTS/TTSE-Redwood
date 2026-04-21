@@ -144,3 +144,53 @@ class TransferManifest(BaseModel):
     def to_structured_dict(self) -> dict:
         """Return a JSON-ready dictionary for logging or transport boundaries."""
         return self.model_dump(mode="json")
+
+
+def normalize_archive_fields_to_standard(manifest_dict: dict) -> dict:
+    """Normalize archive file fields from zip_* names back to standard names.
+
+    The sender writes archive files with zip_file_name and zip_file_size_bytes
+    for clarity. The receiver normalizes these back to standard field names
+    (file_name, file_size_bytes) before model validation.
+
+    Args:
+        manifest_dict: Manifest dictionary, possibly with renamed archive fields.
+
+    Returns:
+        A copy of manifest_dict with zip_file_* fields renamed to standard names
+        for the archive entry (files[1]).
+    """
+    manifest_normalized = dict(manifest_dict)
+
+    if "files" in manifest_normalized and len(manifest_normalized["files"]) > 1:
+        archive_entry = manifest_normalized["files"][1]
+        # Convert renamed fields back to standard names for Pydantic validation
+        if "zip_file_name" in archive_entry:
+            archive_entry["file_name"] = archive_entry.pop("zip_file_name")
+        if "zip_file_size_bytes" in archive_entry:
+            archive_entry["file_size_bytes"] = archive_entry.pop("zip_file_size_bytes")
+
+    return manifest_normalized
+
+
+def apply_archive_field_naming(manifest_dict: dict) -> dict:
+    """Apply archive-specific field naming for clarity in sent manifests.
+
+    Renames the archive entry (files[1]) fields to use zip_* prefix
+    to clearly distinguish the compressed archive from the source file.
+
+    Args:
+        manifest_dict: Manifest dictionary with standard field names.
+
+    Returns:
+        A copy of manifest_dict with archive entry fields renamed to zip_*.
+    """
+    manifest_renamed = dict(manifest_dict)
+
+    if "files" in manifest_renamed and len(manifest_renamed["files"]) > 1:
+        archive_entry = manifest_renamed["files"][1]
+        # Rename to indicate this is the compressed archive
+        archive_entry["zip_file_name"] = archive_entry.pop("file_name")
+        archive_entry["zip_file_size_bytes"] = archive_entry.pop("file_size_bytes")
+
+    return manifest_renamed
