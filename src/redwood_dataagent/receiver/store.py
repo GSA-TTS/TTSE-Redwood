@@ -15,6 +15,7 @@ from typing import Optional
 from redwood_dataagent.audit.events import AuditEventType, EventOutcome
 from redwood_dataagent.audit.logger import log_event
 from redwood_dataagent.exceptions import StorageError
+from redwood_dataagent.logging_utils import prefix_log_message
 from redwood_dataagent.aws.s3 import S3Client
 
 _logger = logging.getLogger(__name__)
@@ -87,7 +88,9 @@ class ReceiverTargetStore:
 
             # Step 1: Check idempotency (marker object)
             if self._is_already_stored(marker_key):
-                _logger.info(f"Transfer {transfer_session_id} already stored (idempotency)")
+                _logger.info(
+                    prefix_log_message("Transfer already stored (idempotency)")
+                )
 
                 # Log idempotent skip
                 log_event(
@@ -147,7 +150,11 @@ class ReceiverTargetStore:
                 },
             )
 
-            _logger.info(f"Successfully stored {file_count} files ({total_bytes} bytes) for transfer {transfer_session_id}")
+            _logger.info(
+                prefix_log_message(
+                    f"Successfully stored {file_count} files ({total_bytes} bytes)"
+                )
+            )
 
             return {
                 "status": "stored",
@@ -260,7 +267,11 @@ class ReceiverTargetStore:
                 Body=json.dumps(marker_metadata).encode("utf-8"),
             )
 
-            _logger.info(f"Created marker object {marker_key} for idempotency")
+            _logger.info(
+                prefix_log_message(
+                    f"Created marker object {marker_key} for idempotency"
+                )
+            )
 
         except Exception as e:
             error_msg = f"Failed to create marker for {transfer_session_id}: {str(e)}"

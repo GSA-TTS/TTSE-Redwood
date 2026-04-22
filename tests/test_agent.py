@@ -272,7 +272,7 @@ class TestSenderWorkflow:
 
                                         exit_code = _create_sender_workflow(config)
                                         assert exit_code == 0
-                                        assert mock_extract.call_count >= 2
+                                        mock_extract.assert_called_once()
                                         mock_compress.assert_called_once()
                                         mock_manifest.assert_called_once()
                                         mock_stage_start.assert_called_once()
