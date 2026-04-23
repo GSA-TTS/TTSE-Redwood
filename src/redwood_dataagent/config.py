@@ -81,7 +81,8 @@ def load_config() -> AgentConfig:
         - Multi-AZ cloud: ``"10.0.1.50,10.0.2.50,10.0.3.50"``
         - DNS: ``"sftp.example.com"``
         - Multi-region DNS: ``"sftp-east.example.com,sftp-west.example.com"``
-        **Required** — raises ``ConfigurationError`` if missing or blank.
+        **Required only when ``AGENT_MODE=sender``** — raises
+        ``ConfigurationError`` if missing or blank in sender mode.
     SFTP_SECRETS_MANAGER_NAME
         AWS Secrets Manager secret name containing SFTP credentials.
         Must have keys: ``user``, ``private-key``, ``public-key``.
@@ -124,25 +125,29 @@ def load_config() -> AgentConfig:
         session_uuid = str(uuid.uuid4())[:8]
         transfer_session_id = f"{timestamp}-{session_uuid}"
 
-    # Parse SFTP endpoints (IPs or DNS names, comma-separated)
-    sftp_endpoints_str = os.getenv("SFTP_ENDPOINTS", "").strip()
-    if not sftp_endpoints_str:
-        raise ConfigurationError("SFTP_ENDPOINTS is required and cannot be blank")
-    
-    raw_sftp_endpoints = sftp_endpoints_str.split(",")
-    sftp_endpoints = [ep.strip() for ep in raw_sftp_endpoints]
-    if any(not ep for ep in sftp_endpoints):
-        raise ConfigurationError(
-            f"SFTP_ENDPOINTS contains empty values (including whitespace-only entries): "
-            f"{sftp_endpoints_str}"
-        )
-
-    # Determine SFTP Secrets Manager name
     tenant = os.getenv("TENANT", "tts")
-    sftp_secrets_manager_name = os.getenv(
-        "SFTP_SECRETS_MANAGER_NAME",
-        f"{tenant}-core-{environment}-redwood-sftp-credentials"
-    )
+
+    # SFTP settings are only required in sender mode.
+    if agent_mode == "sender":
+        sftp_endpoints_str = os.getenv("SFTP_ENDPOINTS", "").strip()
+        if not sftp_endpoints_str:
+            raise ConfigurationError("SFTP_ENDPOINTS is required and cannot be blank")
+
+        raw_sftp_endpoints = sftp_endpoints_str.split(",")
+        sftp_endpoints = [ep.strip() for ep in raw_sftp_endpoints]
+        if any(not ep for ep in sftp_endpoints):
+            raise ConfigurationError(
+                "SFTP_ENDPOINTS contains empty values (including whitespace-only entries): "
+                f"{sftp_endpoints_str}"
+            )
+
+        sftp_secrets_manager_name = os.getenv(
+            "SFTP_SECRETS_MANAGER_NAME",
+            f"{tenant}-core-{environment}-redwood-sftp-credentials"
+        )
+    else:
+        sftp_endpoints = []
+        sftp_secrets_manager_name = ""
 
     if agent_mode == "sender":
         sender_staging_bucket = build_sender_bucket(
