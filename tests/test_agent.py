@@ -95,6 +95,8 @@ class TestSenderWorkflow:
             "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_directory": None,
+            "sftp_endpoints": ["sftp.example.com"],
+            "sftp_secrets_manager_name": "tts-core-development-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -332,6 +334,8 @@ class TestReceiverWorkflow:
             "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_directory": "",
+            "sftp_endpoints": ["sftp.example.com"],
+            "sftp_secrets_manager_name": "tts-core-development-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -621,6 +625,8 @@ class TestRunAgent:
             "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_directory": None,
+            "sftp_endpoints": ["sftp.example.com"],
+            "sftp_secrets_manager_name": "tts-core-development-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -770,6 +776,9 @@ class TestDownloadFromS3:
             "sender_staging_bucket": "tts-core-dev-dot-data-staging",
             "receiver_landing_bucket": "tts-core-dev-gsa-data-landing",
             "receiver_target_bucket": "tts-core-dev-gsa-data-target",
+            "sender_data_directory": "",
+            "sftp_endpoints": ["sftp.example.com"],
+            "sftp_secrets_manager_name": "tts-core-dev-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore

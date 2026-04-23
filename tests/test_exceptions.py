@@ -19,6 +19,7 @@ from redwood_dataagent.exceptions import (
     ConfigurationError,
     ManifestValidationError,
     StorageError,
+    SecretsManagerError,
     SFTPError,
     AuditError,
     EncryptionError
@@ -34,6 +35,7 @@ class TestExceptionHierarchy:
             ConfigurationError,
             ManifestValidationError,
             StorageError,
+            SecretsManagerError,
             SFTPError,
             AuditError,
             EncryptionError
@@ -111,6 +113,22 @@ class TestStorageError:
             raise StorageError("Upload to S3 failed")
         
         assert "upload" in str(exc_info.value).lower()
+
+
+class TestSecretsManagerError:
+    """Test suite for SecretsManagerError exception."""
+
+    def test_secrets_manager_error_creation(self):
+        """Test creating a SecretsManagerError."""
+        error = SecretsManagerError("Secret not found")
+        assert str(error) == "Secret not found"
+
+    def test_secrets_manager_error_can_be_raised(self):
+        """Test raising and catching SecretsManagerError."""
+        with pytest.raises(SecretsManagerError) as exc_info:
+            raise SecretsManagerError("Invalid secret JSON")
+
+        assert "secret" in str(exc_info.value).lower()
 
 
 class TestSFTPError:
@@ -200,6 +218,7 @@ class TestExceptionCatching:
             ConfigurationError("Config error"),
             ManifestValidationError("Manifest error"),
             StorageError("Storage error"),
+            SecretsManagerError("Secrets Manager error"),
             SFTPError("SFTP error"),
             AuditError("Audit error"),
             EncryptionError("Encryption error"),

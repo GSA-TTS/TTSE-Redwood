@@ -65,6 +65,21 @@ class StorageError(RedwoodDataAgentException):
     pass
 
 
+class SecretsManagerError(RedwoodDataAgentException):
+    """
+    Raised when AWS Secrets Manager operations fail.
+
+    This includes:
+    - Secret not found errors
+    - Invalid request/parameter errors
+    - Malformed secret content (for example, invalid JSON)
+    - AWS API failures while retrieving secrets
+
+    TODO: Add optional secret name metadata for safer diagnostics
+    """
+    pass
+
+
 class SFTPError(RedwoodDataAgentException):
     """
     Raised when SFTP connection or transfer operations fail.

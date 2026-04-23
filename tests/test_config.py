@@ -11,7 +11,7 @@ from redwood_dataagent.exceptions import ConfigurationError
 # ---------------------------------------------------------------------------
 
 def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Remove every env var that load_config() reads so tests start from a clean slate."""
+    """Reset env vars used by load_config() and seed required baseline defaults."""
     for var in (
         "AGENT_MODE",
         "AGENCY",
@@ -21,8 +21,12 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "AWS_REGION",
         "LOG_LEVEL",
         "SENDER_DATA_DIRECTORY",
+        "SFTP_ENDPOINTS",
+        "SFTP_SECRETS_MANAGER_NAME",
     ):
         monkeypatch.delenv(var, raising=False)
+
+    monkeypatch.setenv("SFTP_ENDPOINTS", "sftp.example.com")
 
 
 # ---------------------------------------------------------------------------
@@ -410,3 +414,147 @@ def test_configuration_error_is_not_value_error(monkeypatch: pytest.MonkeyPatch)
         pytest.fail("load_config() raised ValueError instead of ConfigurationError")
     except ConfigurationError:
         pass  # expected
+
+
+# ---------------------------------------------------------------------------
+# SFTP Configuration
+# ---------------------------------------------------------------------------
+
+def test_load_config_sftp_endpoints_single_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_ENDPOINTS can be a single IP address."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
+
+    config = load_config()
+
+    assert config.sftp_endpoints == ["10.0.1.50"]
+
+
+def test_load_config_sftp_endpoints_multiple_ips(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_ENDPOINTS can be comma-separated IPs for failover."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50,10.0.2.50,10.0.3.50")
+
+    config = load_config()
+
+    assert config.sftp_endpoints == ["10.0.1.50", "10.0.2.50", "10.0.3.50"]
+
+
+def test_load_config_sftp_endpoints_dns_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_ENDPOINTS can be a DNS name."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "sftp.example.com")
+
+    config = load_config()
+
+    assert config.sftp_endpoints == ["sftp.example.com"]
+
+
+def test_load_config_sftp_endpoints_multiple_dns_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_ENDPOINTS can be comma-separated DNS names."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "sftp-1.example.com,sftp-2.example.com")
+
+    config = load_config()
+
+    assert config.sftp_endpoints == ["sftp-1.example.com", "sftp-2.example.com"]
+
+
+def test_load_config_sftp_endpoints_whitespace_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_ENDPOINTS values are trimmed of surrounding whitespace."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "  10.0.1.50 , 10.0.2.50  ")
+
+    config = load_config()
+
+    assert config.sftp_endpoints == ["10.0.1.50", "10.0.2.50"]
+
+
+def test_load_config_sftp_endpoints_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_ENDPOINTS is required and raises ConfigurationError if missing."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.delenv("SFTP_ENDPOINTS", raising=False)
+
+    with pytest.raises(ConfigurationError, match="SFTP_ENDPOINTS"):
+        load_config()
+
+
+def test_load_config_sftp_endpoints_blank_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Blank SFTP_ENDPOINTS raises ConfigurationError."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "   ")
+
+    with pytest.raises(ConfigurationError, match="SFTP_ENDPOINTS"):
+        load_config()
+
+
+def test_load_config_sftp_endpoints_empty_values_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_ENDPOINTS with empty values after split raises ConfigurationError."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50,,10.0.2.50")
+
+    with pytest.raises(ConfigurationError, match="empty values"):
+        load_config()
+
+
+def test_load_config_sftp_secrets_manager_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_SECRETS_MANAGER_NAME is auto-derived if not provided."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TENANT", "tts")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
+
+    config = load_config()
+
+    assert config.sftp_secrets_manager_name == "tts-core-dev-redwood-sftp-credentials"
+
+
+def test_load_config_sftp_secrets_manager_custom_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_SECRETS_MANAGER_NAME uses custom tenant in auto-derived name."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+    monkeypatch.setenv("TENANT", "custom-tenant")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
+
+    config = load_config()
+
+    assert config.sftp_secrets_manager_name == "custom-tenant-core-prod-redwood-sftp-credentials"
+
+
+def test_load_config_sftp_secrets_manager_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit SFTP_SECRETS_MANAGER_NAME is used when provided."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENCY", "gsa")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
+    monkeypatch.setenv("SFTP_SECRETS_MANAGER_NAME", "my-custom-secret")
+
+    config = load_config()
+
+    assert config.sftp_secrets_manager_name == "my-custom-secret"
+
+
+def test_load_config_sftp_full_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Full SFTP configuration scenario with multiple endpoints and custom secret."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50,10.0.2.50,10.0.3.50")
+    monkeypatch.setenv("SFTP_SECRETS_MANAGER_NAME", "tts-core-dev-redwood-sftp-credentials")
+
+    config = load_config()
+
+    assert config.sftp_endpoints == ["10.0.1.50", "10.0.2.50", "10.0.3.50"]
+    assert config.sftp_secrets_manager_name == "tts-core-dev-redwood-sftp-credentials"
+    assert config.agent_mode == "sender"
+    assert config.environment == "dev"
