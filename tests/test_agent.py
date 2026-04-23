@@ -80,6 +80,25 @@ class TestComputeChecksum:
 class TestSenderWorkflow:
     """Tests for _create_sender_workflow()."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_sftp_client_factory(self):
+        """Mock SFTP client creation for sender workflow unit tests."""
+        with patch("redwood_dataagent.agent.create_sftp_client_from_secrets_manager") as mock_factory:
+            mock_sftp_client = MagicMock()
+            mock_factory.return_value = mock_sftp_client
+
+            def _mock_upload(source_path: Path, remote_path: str) -> dict[str, object]:
+                return {
+                    "source_path": str(source_path),
+                    "remote_path": remote_path,
+                    "file_size_bytes": source_path.stat().st_size,
+                    "attempts": 1,
+                    "endpoint": "sftp.example.com",
+                }
+
+            mock_sftp_client.upload_file.side_effect = _mock_upload
+            yield mock_factory, mock_sftp_client
+
     def _make_config(self, **kwargs: object) -> AgentConfig:
         """Create a test AgentConfig with defaults."""
         defaults = {
@@ -281,7 +300,7 @@ class TestSenderWorkflow:
                                         mock_stage_complete.assert_called_once()
 
     def test_sender_workflow_upload_failure_logs_failure_and_returns_error(self, tmp_path: Path) -> None:
-        """Sender workflow records stage-upload failure and exits non-zero."""
+        """Sender workflow exits non-zero when staging upload fails before SFTP transfer."""
         config = self._make_config(sender_data_directory="s3://bucket/incoming/")
         test_file = tmp_path / "records.json"
         test_file.write_text('[{"id": 1}]')
@@ -300,6 +319,41 @@ class TestSenderWorkflow:
 
                         mock_client.download_file.side_effect = mock_download
                         mock_client.upload_file.side_effect = StorageError("staging upload failed")
+                        mock_scan.return_value = [
+                            ("s3://bucket/incoming/records.json", "records.json")
+                        ]
+
+                        exit_code = _create_sender_workflow(config)
+                        assert exit_code == 1
+
+                        mock_stage_complete.assert_not_called()
+
+
+    def test_sender_workflow_sftp_upload_failure_logs_failure_and_returns_error(
+        self,
+        tmp_path: Path,
+        _mock_sftp_client_factory,
+    ) -> None:
+        """Sender workflow records SFTP failure and exits non-zero."""
+        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1}]')
+        _mock_factory, mock_sftp_client = _mock_sftp_client_factory
+        mock_sftp_client.upload_file.side_effect = StorageError("sftp upload failed")
+
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed"):
+                with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                    with patch("redwood_dataagent.agent.log_sftp_transfer_complete") as mock_stage_complete:
+                        mock_client = MagicMock()
+                        mock_s3_class.return_value = mock_client
+
+                        def mock_download(bucket, key, dest):
+                            import shutil
+
+                            shutil.copy2(test_file, dest)
+
+                        mock_client.download_file.side_effect = mock_download
                         mock_scan.return_value = [
                             ("s3://bucket/incoming/records.json", "records.json")
                         ]
@@ -640,17 +694,25 @@ class TestRunAgent:
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._download_from_s3") as mock_download:
                 with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-                    mock_client = MagicMock()
-                    mock_s3_class.return_value = mock_client
-                    
-                    def mock_s3_download(bucket, key, dest):
-                        import shutil
-                        shutil.copy2(source_file, dest)
-                    
-                    mock_client.download_file.side_effect = mock_s3_download
-                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
-                    
-                    assert run_agent(config) == 0
+                    with patch("redwood_dataagent.agent.create_sftp_client_from_secrets_manager") as mock_sftp_factory:
+                        mock_client = MagicMock()
+                        mock_s3_class.return_value = mock_client
+                        
+                        def mock_s3_download(bucket, key, dest):
+                            import shutil
+                            shutil.copy2(source_file, dest)
+                        
+                        mock_client.download_file.side_effect = mock_s3_download
+                        mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                        
+                        mock_sftp_client = MagicMock()
+                        mock_sftp_factory.return_value = mock_sftp_client
+                        mock_sftp_client.upload_file.return_value = {
+                            "file_size_bytes": 1024,
+                            "endpoint": "sftp.example.com",
+                        }
+                        
+                        assert run_agent(config) == 0
 
     def test_run_agent_receiver_returns_success(self) -> None:
         """Verify receiver mode agent completes with exit code 0."""

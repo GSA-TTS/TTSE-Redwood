@@ -49,6 +49,7 @@ from .models.manifest import (
 from .policy import PolicyApprover
 from .receiver.landing import ReceiverLandingZone
 from .receiver.store import ReceiverTargetStore
+from .sftp import create_sftp_client_from_secrets_manager
 from .storage.conventions import SenderStoragePath
 
 # Create module logger (will auto-inject transfer_session_id from context)
@@ -735,14 +736,8 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
             # 4. Upload artifacts to sender staging bucket
             staging_client = S3Client(aws_region=config.aws_region)
-            total_uploaded_bytes = 0
-            log_sftp_transfer_start(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                destination_host=config.sender_staging_bucket,
-                details={"step": "stage_upload", "artifact_count": 2},
-            )
+            total_staged_bytes = 0
+            staged_artifacts: list[tuple[Path, str]] = []
             for artifact_path in (archive_path, manifest_path):
                 staging_key = SenderStoragePath.transfers(
                     config.transfer_session_id,
@@ -755,24 +750,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                             artifact_path, config.sender_staging_bucket, staging_key
                         ),
                     )
-                except Exception as e:
-                    log_sftp_transfer_complete(
-                        transfer_session_id=config.transfer_session_id,
-                        sender_agency=config.sender_agency,
-                        receiver_agency=config.receiver_agency,
-                        destination_host=config.sender_staging_bucket,
-                        bytes_transferred=total_uploaded_bytes,
-                        outcome=EventOutcome.FAILURE,
-                        details={
-                            "step": "stage_upload",
-                            "artifact_name": artifact_path.name,
-                            "staging_key": staging_key,
-                            "error": str(e),
-                        },
-                    )
+                except Exception:
                     raise
 
-                total_uploaded_bytes += artifact_path.stat().st_size
+                total_staged_bytes += artifact_path.stat().st_size
+                staged_artifacts.append((artifact_path, staging_key))
                 LOGGER.info(
                     prefix_log_message(
                         f"Staged artifact to S3: {artifact_path.name}",
@@ -786,21 +768,80 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                     },
                 )
 
+            # 5. Upload staged artifacts to receiver SFTP endpoints
+            sftp_client = create_sftp_client_from_secrets_manager(
+                sftp_endpoints=config.sftp_endpoints,
+                secrets_manager_name=config.sftp_secrets_manager_name,
+                aws_region=config.aws_region,
+            )
+            primary_sftp_endpoint = config.sftp_endpoints[0]
+            total_sftp_uploaded_bytes = 0
+            log_sftp_transfer_start(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                destination_host=primary_sftp_endpoint,
+                details={
+                    "step": "sftp_upload",
+                    "artifact_count": len(staged_artifacts),
+                    "endpoints": config.sftp_endpoints,
+                },
+            )
+
+            for artifact_path, _staging_key in staged_artifacts:
+                remote_path = f"/{config.sender_agency}/{config.transfer_session_id}/{artifact_path.name}"
+                try:
+                    upload_metadata = _retry_operation(
+                        "sftp_upload",
+                        lambda: sftp_client.upload_file(artifact_path, remote_path),
+                    )
+                except Exception as e:
+                    log_sftp_transfer_complete(
+                        transfer_session_id=config.transfer_session_id,
+                        sender_agency=config.sender_agency,
+                        receiver_agency=config.receiver_agency,
+                        destination_host=primary_sftp_endpoint,
+                        bytes_transferred=total_sftp_uploaded_bytes,
+                        outcome=EventOutcome.FAILURE,
+                        details={
+                            "step": "sftp_upload",
+                            "remote_path": remote_path,
+                            "error": str(e),
+                        },
+                    )
+                    raise
+
+                total_sftp_uploaded_bytes += int(upload_metadata.get("file_size_bytes", 0))
+                LOGGER.info(
+                    prefix_log_message(
+                        f"Uploaded artifact to SFTP: {artifact_path.name}",
+                        agent_mode=config.agent_mode,
+                        transfer_session_id=config.transfer_session_id,
+                    ),
+                    extra={
+                        "event": "sender_artifact_uploaded_sftp",
+                        "remote_path": remote_path,
+                        "endpoint": upload_metadata.get("endpoint", primary_sftp_endpoint),
+                    },
+                )
+
             log_sftp_transfer_complete(
                 transfer_session_id=config.transfer_session_id,
                 sender_agency=config.sender_agency,
                 receiver_agency=config.receiver_agency,
-                destination_host=config.sender_staging_bucket,
+                destination_host=primary_sftp_endpoint,
                 outcome=EventOutcome.SUCCESS,
-                bytes_transferred=total_uploaded_bytes,
+                bytes_transferred=total_sftp_uploaded_bytes,
                 details={
-                    "step": "stage_upload",
-                    "artifact_count": 2,
+                    "step": "sftp_upload",
+                    "artifact_count": len(staged_artifacts),
+                    "remote_prefix": f"/{config.sender_agency}/{config.transfer_session_id}/",
                     "staging_prefix": f"transfers/{config.transfer_session_id}/",
+                    "staged_bytes": total_staged_bytes,
                 },
             )
 
-            # 5. Mark file as processed
+            # 6. Mark file as processed
             _retry_operation(
                 "mark_file_processed",
                 lambda: _mark_file_processed(file_name, config.sender_data_directory, config.aws_region),
