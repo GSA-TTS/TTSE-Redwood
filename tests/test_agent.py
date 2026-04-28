@@ -661,11 +661,11 @@ class TestReceiverWorkflow:
         set_agent_mode(None)
         set_transfer_session_id(None)
 
-    def test_receiver_scan_summary_includes_transfer_details(
+    def test_receiver_scan_summary_uses_already_processed_and_last_three(
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Receiver scan completion log includes exact processed/skipped transfer IDs."""
+        """Receiver scan completion log reports already processed and last 3 IDs."""
         config = self._make_config(transfer_session_id="run-session")
 
         with patch("redwood_dataagent.agent.log_pipeline_start"):
@@ -679,7 +679,10 @@ class TestReceiverWorkflow:
 
                         mock_landing.list_sender_agencies.return_value = ["dot"]
                         mock_landing.list_pending_transfers.return_value = [
-                            "sess-skip",
+                            "20260417-194307-ab27f2a6",
+                            "20260421-181207-0ed7528b",
+                            "20260424-014736-3401835c",
+                            "20260424-153833-5a3b2467",
                             "sess-process",
                         ]
 
@@ -704,7 +707,7 @@ class TestReceiverWorkflow:
                         }
 
                         def already_stored_side_effect(session_id: str, sender: str) -> bool:
-                            return session_id == "sess-skip"
+                            return session_id != "sess-process"
 
                         mock_store.is_transfer_already_stored.side_effect = already_stored_side_effect
 
@@ -720,15 +723,22 @@ class TestReceiverWorkflow:
 
         scan_record = scan_records[0]
         assert scan_record.processed == 1
-        assert scan_record.skipped == 1
+        assert scan_record.already_processed == 4
         assert scan_record.failed == 0
-        assert scan_record.processed_transfers == [
-            {"sender_agency": "dot", "transfer_session_id": "sess-process"}
+        assert scan_record.last_3_already_processed == [
+            {
+                "sender_agency": "dot",
+                "transfer_session_id": "20260424-153833-5a3b2467",
+            },
+            {
+                "sender_agency": "dot",
+                "transfer_session_id": "20260424-014736-3401835c",
+            },
+            {
+                "sender_agency": "dot",
+                "transfer_session_id": "20260421-181207-0ed7528b",
+            },
         ]
-        assert scan_record.skipped_transfers == [
-            {"sender_agency": "dot", "transfer_session_id": "sess-skip"}
-        ]
-        assert scan_record.failed_transfers == []
 
 
 class TestRunAgent:

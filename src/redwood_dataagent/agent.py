@@ -1074,10 +1074,10 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
         )
 
         processed = 0
-        skipped = 0
+        already_processed = 0
         failed = 0
         processed_transfers: list[dict[str, str]] = []
-        skipped_transfers: list[dict[str, str]] = []
+        already_processed_transfers: list[dict[str, str]] = []
         failed_transfers: list[dict[str, str]] = []
         for sender_agency in sender_agencies:
             transfer_sessions = _retry_operation(
@@ -1089,8 +1089,8 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                     # Pre-check target idempotency marker so already-complete transfers
                     # are not fetched/validated/decompressed again.
                     if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
-                        skipped += 1
-                        skipped_transfers.append(
+                        already_processed += 1
+                        already_processed_transfers.append(
                             {
                                 "sender_agency": sender_agency,
                                 "transfer_session_id": transfer_session_id,
@@ -1140,6 +1140,8 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                             }
                         )
 
+        recent_already_processed: list[dict[str, str]] = []
+
         if processed == 0 and failed == 0:
             LOGGER.info(
                 prefix_log_message(
@@ -1149,40 +1151,35 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 ),
                 extra={
                     "event": "receiver_no_new_files",
-                    "skipped": skipped,
+                    "already_processed": already_processed,
                     "bucket": config.receiver_landing_bucket,
                 },
             )
         else:
-            processed_refs = [
+            recent_already_processed = sorted(
+                already_processed_transfers,
+                key=lambda item: item["transfer_session_id"],
+                reverse=True,
+            )[:3]
+            recent_already_processed_refs = [
                 f"{item['sender_agency']}/{item['transfer_session_id']}"
-                for item in processed_transfers
-            ]
-            skipped_refs = [
-                f"{item['sender_agency']}/{item['transfer_session_id']}"
-                for item in skipped_transfers
-            ]
-            failed_refs = [
-                f"{item['sender_agency']}/{item['transfer_session_id']}"
-                for item in failed_transfers
+                for item in recent_already_processed
             ]
 
             LOGGER.info(
                 prefix_log_message(
                     "Receiver scan complete: "
-                    f"{processed} processed, {skipped} skipped, {failed} failed "
-                    f"(processed={processed_refs}, skipped={skipped_refs}, failed={failed_refs})",
+                    f"{processed} processed, {already_processed} already processed, {failed} failed "
+                    f"(last_3_already_processed={recent_already_processed_refs})",
                     agent_mode=config.agent_mode,
                     transfer_session_id=config.transfer_session_id,
                 ),
                 extra={
                     "event": "receiver_scan_complete",
                     "processed": processed,
-                    "skipped": skipped,
+                    "already_processed": already_processed,
                     "failed": failed,
-                    "processed_transfers": processed_transfers,
-                    "skipped_transfers": skipped_transfers,
-                    "failed_transfers": failed_transfers,
+                    "last_3_already_processed": recent_already_processed,
                 },
             )
 
@@ -1194,10 +1191,10 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             outcome=outcome,
             details={
                 "processed": processed,
-                "skipped": skipped,
+                "already_processed": already_processed,
                 "failed": failed,
                 "processed_transfers": processed_transfers,
-                "skipped_transfers": skipped_transfers,
+                "last_3_already_processed": recent_already_processed,
                 "failed_transfers": failed_transfers,
             },
         )
