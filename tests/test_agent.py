@@ -526,25 +526,26 @@ class TestReceiverWorkflow:
                         mock_start.assert_called_once()
                         mock_complete.assert_called_once()
 
-    def test_receiver_workflow_logs_validate_and_store(self) -> None:
-        """Receiver logs validate_manifest and store_data per transfer."""
+    def test_receiver_workflow_avoids_duplicate_store_audit_logs(self) -> None:
+        """Receiver orchestrator avoids duplicate store_data audit logging."""
         config = self._make_config()
 
-        with patch("redwood_dataagent.agent.log_validate_manifest") as mock_validate:
-            with patch("redwood_dataagent.agent.log_store_data") as mock_store_log:
-                with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
-                    with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
-                        mock_landing = MagicMock()
-                        mock_store = MagicMock()
-                        mock_landing_cls.return_value = mock_landing
-                        mock_store_cls.return_value = mock_store
-                        mock_store.is_transfer_already_stored.return_value = False
-                        self._setup_mock_landing(mock_landing)
-                        mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
+        with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+            with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                mock_landing = MagicMock()
+                mock_store = MagicMock()
+                mock_landing_cls.return_value = mock_landing
+                mock_store_cls.return_value = mock_store
+                mock_store.is_transfer_already_stored.return_value = False
+                self._setup_mock_landing(mock_landing)
+                mock_store.store_to_target.return_value = {
+                    "status": "stored",
+                    "file_count": 1,
+                    "target_location": "s3://x/",
+                }
 
-                        _create_receiver_workflow(config)
-                        assert mock_validate.call_count >= 1
-                        mock_store_log.assert_called_once()
+                _create_receiver_workflow(config)
+                mock_store.store_to_target.assert_called_once()
 
     def test_receiver_workflow_list_sender_agencies_failure_returns_1(self) -> None:
         """Returns 1 when listing sender agencies raises an exception."""
@@ -659,6 +660,75 @@ class TestReceiverWorkflow:
         )
         set_agent_mode(None)
         set_transfer_session_id(None)
+
+    def test_receiver_scan_summary_includes_transfer_details(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Receiver scan completion log includes exact processed/skipped transfer IDs."""
+        config = self._make_config(transfer_session_id="run-session")
+
+        with patch("redwood_dataagent.agent.log_pipeline_start"):
+            with patch("redwood_dataagent.agent.log_pipeline_complete"):
+                with patch("redwood_dataagent.agent.ReceiverLandingZone") as mock_landing_cls:
+                    with patch("redwood_dataagent.agent.ReceiverTargetStore") as mock_store_cls:
+                        mock_landing = MagicMock()
+                        mock_store = MagicMock()
+                        mock_landing_cls.return_value = mock_landing
+                        mock_store_cls.return_value = mock_store
+
+                        mock_landing.list_sender_agencies.return_value = ["dot"]
+                        mock_landing.list_pending_transfers.return_value = [
+                            "sess-skip",
+                            "sess-process",
+                        ]
+
+                        mock_manifest = MagicMock()
+                        mock_manifest.transfer_session_id = "sess-process"
+                        mock_manifest.receiver_agency = config.receiver_agency
+                        mock_manifest.total_file_count = 2
+
+                        mock_landing.fetch_from_landing_bucket.return_value = (
+                            b"archive-bytes",
+                            {},
+                        )
+                        mock_landing.validate_manifest.return_value = mock_manifest
+                        mock_landing.decompress_archive.return_value = {
+                            "file_count": 1,
+                            "total_bytes": 42,
+                        }
+                        mock_store.store_to_target.return_value = {
+                            "status": "stored",
+                            "file_count": 1,
+                            "target_location": "s3://x/",
+                        }
+
+                        def already_stored_side_effect(session_id: str, sender: str) -> bool:
+                            return session_id == "sess-skip"
+
+                        mock_store.is_transfer_already_stored.side_effect = already_stored_side_effect
+
+                        with caplog.at_level(logging.INFO, logger="redwood_dataagent"):
+                            assert _create_receiver_workflow(config) == 0
+
+        scan_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "receiver_scan_complete"
+        ]
+        assert len(scan_records) == 1
+
+        scan_record = scan_records[0]
+        assert scan_record.processed == 1
+        assert scan_record.skipped == 1
+        assert scan_record.failed == 0
+        assert scan_record.processed_transfers == [
+            {"sender_agency": "dot", "transfer_session_id": "sess-process"}
+        ]
+        assert scan_record.skipped_transfers == [
+            {"sender_agency": "dot", "transfer_session_id": "sess-skip"}
+        ]
+        assert scan_record.failed_transfers == []
 
 
 class TestRunAgent:

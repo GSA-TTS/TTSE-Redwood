@@ -58,6 +58,14 @@ __all__ = [
 ]
 
 
+_NOISY_LIBRARY_LOG_LEVELS: dict[str, int] = {
+    # Paramiko emits transport/session chatter at INFO that lacks transfer context.
+    # Keeping these at WARNING+ so only actionable issues are emitted.
+    "paramiko": logging.WARNING,
+    "paramiko.transport": logging.WARNING,
+}
+
+
 class JsonFormatter(logging.Formatter):
     """Render log records as a compact JSON payload with context variables."""
 
@@ -103,6 +111,9 @@ def configure_logging(level: str) -> None:
     """Configure the root logger to emit JSON-formatted records."""
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
+
+    for logger_name, logger_level in _NOISY_LIBRARY_LOG_LEVELS.items():
+        logging.getLogger(logger_name).setLevel(logger_level)
 
     if root_logger.handlers:
         # Reuse existing handlers (tests and hosted environments often pre-configure handlers)

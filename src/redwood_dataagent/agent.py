@@ -21,7 +21,6 @@ from typing import Any, Callable, TypeVar
 from .audit.events import EventOutcome
 from .audit.logger import (
     log_compress,
-    log_decompress,
     log_extract_data,
     log_manifest_created,
     log_pipeline_complete,
@@ -29,8 +28,6 @@ from .audit.logger import (
     log_policy_check,
     log_sftp_transfer_complete,
     log_sftp_transfer_start,
-    log_store_data,
-    log_validate_manifest,
 )
 from .aws.s3 import S3Client
 from .config import AgentConfig
@@ -974,18 +971,6 @@ def _process_single_receiver_transfer(
                 f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
             )
 
-        log_validate_manifest(
-            transfer_session_id=transfer_session_id,
-            sender_agency=sender_agency,
-            receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.SUCCESS,
-            details={
-                "manifest_source": "landing_storage",
-                "manifest_file_count": manifest.total_file_count,
-                "transfer_session_id": manifest.transfer_session_id,
-            },
-        )
-
         with tempfile.TemporaryDirectory(prefix="redwood-receiver-") as tmpdir:
             extraction_metadata = _retry_operation(
                 "decompress",
@@ -998,19 +983,7 @@ def _process_single_receiver_transfer(
                 ),
             )
 
-            log_decompress(
-                transfer_session_id=transfer_session_id,
-                sender_agency=sender_agency,
-                receiver_agency=config.receiver_agency,
-                outcome=EventOutcome.SUCCESS,
-                details={
-                    "step": "decompress",
-                    "files_processed": extraction_metadata.get("file_count", 0),
-                    "total_bytes": extraction_metadata.get("total_bytes", 0),
-                },
-            )
-
-            store_result = _retry_operation(
+            _retry_operation(
                 "store_to_target",
                 lambda: target_store.store_to_target(
                     extracted_files_dir=Path(tmpdir),
@@ -1019,20 +992,6 @@ def _process_single_receiver_transfer(
                     receiver_agency=config.receiver_agency,
                 ),
             )
-
-        log_store_data(
-            transfer_session_id=transfer_session_id,
-            sender_agency=sender_agency,
-            receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.SUCCESS,
-            details={
-                "step": "store",
-                "destination_bucket": config.receiver_target_bucket,
-                "status": store_result.get("status"),
-                "file_count": store_result.get("file_count", 0),
-                "target_location": store_result.get("target_location"),
-            },
-        )
 
         return 0
 
@@ -1117,6 +1076,9 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
         processed = 0
         skipped = 0
         failed = 0
+        processed_transfers: list[dict[str, str]] = []
+        skipped_transfers: list[dict[str, str]] = []
+        failed_transfers: list[dict[str, str]] = []
         for sender_agency in sender_agencies:
             transfer_sessions = _retry_operation(
                 f"list_pending_transfers_{sender_agency}",
@@ -1128,6 +1090,12 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                     # are not fetched/validated/decompressed again.
                     if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
                         skipped += 1
+                        skipped_transfers.append(
+                            {
+                                "sender_agency": sender_agency,
+                                "transfer_session_id": transfer_session_id,
+                            }
+                        )
                         LOGGER.debug(
                             prefix_log_message(
                                 f"Transfer from {sender_agency} already marked done in target; skipping.",
@@ -1157,8 +1125,20 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                     )
                     if result == 0:
                         processed += 1
+                        processed_transfers.append(
+                            {
+                                "sender_agency": sender_agency,
+                                "transfer_session_id": transfer_session_id,
+                            }
+                        )
                     else:
                         failed += 1
+                        failed_transfers.append(
+                            {
+                                "sender_agency": sender_agency,
+                                "transfer_session_id": transfer_session_id,
+                            }
+                        )
 
         if processed == 0 and failed == 0:
             LOGGER.info(
@@ -1174,9 +1154,24 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 },
             )
         else:
+            processed_refs = [
+                f"{item['sender_agency']}/{item['transfer_session_id']}"
+                for item in processed_transfers
+            ]
+            skipped_refs = [
+                f"{item['sender_agency']}/{item['transfer_session_id']}"
+                for item in skipped_transfers
+            ]
+            failed_refs = [
+                f"{item['sender_agency']}/{item['transfer_session_id']}"
+                for item in failed_transfers
+            ]
+
             LOGGER.info(
                 prefix_log_message(
-                    f"Receiver scan complete: {processed} processed, {skipped} skipped, {failed} failed",
+                    "Receiver scan complete: "
+                    f"{processed} processed, {skipped} skipped, {failed} failed "
+                    f"(processed={processed_refs}, skipped={skipped_refs}, failed={failed_refs})",
                     agent_mode=config.agent_mode,
                     transfer_session_id=config.transfer_session_id,
                 ),
@@ -1185,6 +1180,9 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                     "processed": processed,
                     "skipped": skipped,
                     "failed": failed,
+                    "processed_transfers": processed_transfers,
+                    "skipped_transfers": skipped_transfers,
+                    "failed_transfers": failed_transfers,
                 },
             )
 
@@ -1194,7 +1192,14 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             sender_agency="",
             receiver_agency=config.receiver_agency,
             outcome=outcome,
-            details={"processed": processed, "skipped": skipped, "failed": failed},
+            details={
+                "processed": processed,
+                "skipped": skipped,
+                "failed": failed,
+                "processed_transfers": processed_transfers,
+                "skipped_transfers": skipped_transfers,
+                "failed_transfers": failed_transfers,
+            },
         )
 
         return 0 if failed == 0 else 1

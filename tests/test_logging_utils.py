@@ -357,6 +357,13 @@ class TestConfigureLogging:
             root_logger = logging.getLogger()
             assert root_logger.level == getattr(logging, level_name)
 
+    def test_configure_logging_suppresses_paramiko_chatter(self):
+        """Paramiko transport/session chatter is clamped at WARNING+."""
+        configure_logging("INFO")
+
+        assert logging.getLogger("paramiko").level == logging.WARNING
+        assert logging.getLogger("paramiko.transport").level == logging.WARNING
+
 
 class TestIntegration:
     """Integration tests for full logging pipeline."""
