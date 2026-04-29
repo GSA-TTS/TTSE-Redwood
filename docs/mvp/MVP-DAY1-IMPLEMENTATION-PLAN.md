@@ -135,15 +135,13 @@
 
 Note: For Day 1 planning, these naming conventions are GSA-proposed standards that will be shared with DOT later and refined based on implementation discussions.
 
-### Sender Storage (Cloud-Agnostic)
+### Sender Storage (AWS S3)
 
 **Pattern:** `tts-core-{environment}-{agency}-data-{purpose}`
 
 Examples:
 
-- AWS S3: `tts-core-dev-dot-data-staging`
-- Azure Blob container: `tts-core-dev-dot-data-staging`
-- Equivalent object store in other clouds or on-prem
+- `tts-core-dev-dot-data-staging`
 
 ### GSA Buckets (AWS)
 
