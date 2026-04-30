@@ -1,17 +1,39 @@
-.DS_Store
-
-# Python
+# Python cache
 __pycache__/
 *.py[cod]
-*.egg-info/
-dist/
-build/
+*$py.class
+
+# Virtual environments
 .venv/
 venv/
+env/
 
-# Node
-node_modules/
+# Test and coverage
+coverage/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 
-# IDE
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+
+# IDE and OS
 .vscode/
 .idea/
+.DS_Store
+SESSION*
+
+# Local env files
+.env
+.env.*
+
+# Local test files
+test-data/
