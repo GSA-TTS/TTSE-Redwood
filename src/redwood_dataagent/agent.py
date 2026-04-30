@@ -90,12 +90,13 @@ def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: 
 
 
 def _build_processed_marker_key(key: str) -> str:
-    """Build marker object key for a processed incoming file."""
-    if key.startswith("incoming/"):
-        return key.replace("incoming/", "processed/", 1) + ".done"
+    """Build marker object key for a processed sender scan file."""
+    sender_scan_prefix = SenderStoragePath.scan_prefix()
+    if key.startswith(sender_scan_prefix):
+        return key.replace(sender_scan_prefix, "processed/", 1) + ".done"
 
-    if "/incoming/" in key:
-        return key.replace("/incoming/", "/processed/", 1) + ".done"
+    if f"/{sender_scan_prefix}" in key:
+        return key.replace(f"/{sender_scan_prefix}", "/processed/", 1) + ".done"
 
     return f"processed/{Path(key).name}.done"
 
@@ -115,7 +116,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
     Parameters
     ----------
     directory_path : str
-        S3 directory path (e.g., s3://bucket/incoming/)
+        S3 directory path (e.g., s3://bucket/outgoing/)
     aws_region : str
         AWS region for S3 access
 
@@ -140,7 +141,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
         bucket, prefix = parsed
         client = S3Client(aws_region=aws_region)
         
-        # List objects in the incoming directory
+        # List objects in the configured sender scan directory
         response = client._client.list_objects_v2(Bucket=bucket, Prefix=prefix)
         files = []
         
@@ -161,7 +162,6 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
                 continue
             
             # Check if file has been processed (marker exists in processed/)
-            # Construct absolute path: replace 'incoming/' with 'processed/'
             processed_marker_key = _build_processed_marker_key(key)
             try:
                 client._client.head_object(Bucket=bucket, Key=processed_marker_key)
@@ -187,7 +187,7 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
     file_name : str
         Name of the file that was processed
     directory_path : str
-        S3 directory path (e.g., s3://bucket/incoming/)
+        S3 directory path (e.g., s3://bucket/outgoing/)
     aws_region : str
         AWS region for S3 access
 
@@ -207,11 +207,10 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
         client = S3Client(aws_region=aws_region)
         
         # Create marker in processed/ directory using absolute path
-        # Replace 'incoming/' with 'processed/' in the prefix
         if not prefix.endswith("/"):
             prefix = f"{prefix}/"
 
-        processed_prefix = prefix.replace("incoming/", "processed/", 1)
+        processed_prefix = prefix.replace(SenderStoragePath.scan_prefix(), "processed/", 1)
         marker_key = f"{processed_prefix}{file_name}.done"
         timestamp = datetime.now(timezone.utc).isoformat()
         marker_metadata = {
@@ -500,7 +499,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             LOGGER.warning(
                 prefix_log_message(
                     "Sender data directory not configured. "
-                    "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/incoming/)",
+                    "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/outgoing/)",
                     agent_mode=config.agent_mode,
                     transfer_session_id=config.transfer_session_id,
                 )

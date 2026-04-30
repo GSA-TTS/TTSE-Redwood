@@ -154,7 +154,7 @@ def load_config() -> AgentConfig:
             sender_agency, environment, StoragePurpose.STAGING
         )
         sender_data_directory = (
-            f"s3://{sender_staging_bucket}/{SenderStoragePath.incoming_prefix()}"
+            f"s3://{sender_staging_bucket}/{SenderStoragePath.scan_prefix()}"
         )
         receiver_landing_bucket = ""
         receiver_target_bucket = ""
