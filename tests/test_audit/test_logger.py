@@ -386,7 +386,7 @@ class TestReceiverStageEvents:
 
     def test_store_data(self):
         """Test data storage event."""
-        details = {"s3_bucket": "data-warehouse", "storage_path": "/incoming/2026-03-24/"}
+        details = {"s3_bucket": "data-warehouse", "storage_path": "/outgoing/2026-03-24/"}
         event = log_store_data(
             transfer_session_id="transfer-001",
             sender_agency="dot",

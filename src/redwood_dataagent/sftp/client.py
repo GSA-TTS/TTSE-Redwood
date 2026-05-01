@@ -71,7 +71,7 @@ class SFTPClient:
     ... )
     >>> client.upload_file(
     ...     Path("/tmp/archive.tar.gz"),
-    ...     "/incoming/transfers/archive.tar.gz"
+    ...     "/outgoing/transfers/archive.tar.gz"
     ... )
     
     >>> # Using DNS with key file
@@ -315,7 +315,7 @@ class SFTPClient:
         source_path : Path
             Local file path in container filesystem to upload
         remote_path : str
-            Destination path on SFTP server (e.g. "/incoming/transfers/file.tar.gz")
+            Destination path on SFTP server (e.g. "/outgoing/transfers/file.tar.gz")
         chunk_size : int
             Upload buffer size in bytes (default: 32KB)
 
@@ -340,7 +340,7 @@ class SFTPClient:
         >>> client = SFTPClient(...)
         >>> metadata = client.upload_file(
         ...     Path("/tmp/archive.tar.gz"),
-        ...     "/incoming/transfers/archive.tar.gz"
+        ...     "/outgoing/transfers/archive.tar.gz"
         ... )
         >>> print(
         ...     f"Uploaded {metadata['file_size_bytes']} bytes to {metadata['endpoint']}"
@@ -422,7 +422,7 @@ class SFTPClient:
         Parameters
         ----------
         remote_path : str
-            Remote file path to check (e.g. "/incoming/transfers/file.tar.gz")
+            Remote file path to check (e.g. "/outgoing/transfers/file.tar.gz")
 
         Returns
         -------
@@ -431,7 +431,7 @@ class SFTPClient:
 
         Example
         -------
-        >>> if client.file_exists("/incoming/transfers/manifest.json"):
+        >>> if client.file_exists("/outgoing/transfers/manifest.json"):
         ...     print("Manifest already uploaded")
         """
         try:
@@ -465,7 +465,7 @@ class SFTPClient:
 
         Example
         -------
-        >>> client.delete_file("/incoming/transfers/failed-upload.tar.gz")
+        >>> client.delete_file("/outgoing/transfers/failed-upload.tar.gz")
         """
         try:
             sftp = self._connect()

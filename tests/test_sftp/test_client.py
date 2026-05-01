@@ -115,10 +115,10 @@ class TestSFTPClientUpload:
             username="sender",
             password="secret",
         )
-        metadata = client.upload_file(source_file, "/incoming/archive.tar.gz")
+        metadata = client.upload_file(source_file, "/outgoing/archive.tar.gz")
 
         assert metadata["source_path"] == str(source_file)
-        assert metadata["remote_path"] == "/incoming/archive.tar.gz"
+        assert metadata["remote_path"] == "/outgoing/archive.tar.gz"
         assert metadata["file_size_bytes"] == 7
         assert metadata["attempts"] == 1
         assert metadata["endpoint"] == "receiver.example.com"
@@ -149,7 +149,7 @@ class TestSFTPClientUpload:
 
         mock_connect.side_effect = _mock_connect_with_selected_host
 
-        metadata = client.upload_file(source_file, "/incoming/archive.tar.gz")
+        metadata = client.upload_file(source_file, "/outgoing/archive.tar.gz")
 
         assert metadata["endpoint"] == hosts[1]
 
@@ -162,7 +162,7 @@ class TestSFTPClientUpload:
         )
 
         with pytest.raises(SFTPError, match="Local file does not exist"):
-            client.upload_file(Path("/nonexistent.tar.gz"), "/incoming/")
+            client.upload_file(Path("/nonexistent.tar.gz"), "/outgoing/")
 
     def test_upload_dir_fails(self, tmp_path):
         """Test upload fails when source is directory."""
@@ -176,7 +176,7 @@ class TestSFTPClientUpload:
         )
 
         with pytest.raises(SFTPError, match="Path is not a file"):
-            client.upload_file(source_dir, "/incoming/")
+            client.upload_file(source_dir, "/outgoing/")
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
     def test_upload_auth_error(self, mock_connect, tmp_path):
@@ -195,7 +195,7 @@ class TestSFTPClientUpload:
         )
 
         with pytest.raises(SFTPError, match="SFTP authentication failed"):
-            client.upload_file(source_file, "/incoming/archive.tar.gz")
+            client.upload_file(source_file, "/outgoing/archive.tar.gz")
         assert mock_connect.call_count == 1
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
@@ -215,7 +215,7 @@ class TestSFTPClientUpload:
         )
 
         with pytest.raises(SFTPError, match="after .* retries"):
-            client.upload_file(source_file, "/incoming/archive.tar.gz")
+            client.upload_file(source_file, "/outgoing/archive.tar.gz")
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
     def test_upload_network_error(self, mock_connect, tmp_path):
@@ -232,7 +232,7 @@ class TestSFTPClientUpload:
         )
 
         with pytest.raises(SFTPError, match="Failed to read local file"):
-            client.upload_file(source_file, "/incoming/archive.tar.gz")
+            client.upload_file(source_file, "/outgoing/archive.tar.gz")
 
     @mock.patch("redwood_dataagent.sftp.client.sleep")
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
@@ -257,7 +257,7 @@ class TestSFTPClientUpload:
             retry_backoff=0.1,
         )
 
-        metadata = client.upload_file(source_file, "/incoming/archive.tar.gz")
+        metadata = client.upload_file(source_file, "/outgoing/archive.tar.gz")
         assert metadata["attempts"] == 2
         mock_sleep.assert_called_once()
 
@@ -281,7 +281,7 @@ class TestSFTPClientUpload:
         )
 
         with pytest.raises(SFTPError, match="after .* retries"):
-            client.upload_file(source_file, "/incoming/archive.tar.gz")
+            client.upload_file(source_file, "/outgoing/archive.tar.gz")
 
 
 class TestSFTPClientFileExists:
@@ -299,7 +299,7 @@ class TestSFTPClientFileExists:
             username="sender",
             password="secret",
         )
-        exists = client.file_exists("/incoming/manifest.json")
+        exists = client.file_exists("/outgoing/manifest.json")
 
         assert exists is True
 
@@ -315,7 +315,7 @@ class TestSFTPClientFileExists:
             username="sender",
             password="secret",
         )
-        exists = client.file_exists("/incoming/nonexistent.json")
+        exists = client.file_exists("/outgoing/nonexistent.json")
 
         assert exists is False
 
@@ -329,7 +329,7 @@ class TestSFTPClientFileExists:
             username="sender",
             password="secret",
         )
-        exists = client.file_exists("/incoming/manifest.json")
+        exists = client.file_exists("/outgoing/manifest.json")
 
         assert exists is False
 
@@ -348,10 +348,10 @@ class TestSFTPClientDelete:
             username="sender",
             password="secret",
         )
-        client.delete_file("/incoming/failed-upload.tar.gz")
+        client.delete_file("/outgoing/failed-upload.tar.gz")
 
         mock_sftp.remove.assert_called_once_with(
-            "/incoming/failed-upload.tar.gz"
+            "/outgoing/failed-upload.tar.gz"
         )
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
@@ -368,7 +368,7 @@ class TestSFTPClientDelete:
         )
 
         with pytest.raises(SFTPError, match="File not found"):
-            client.delete_file("/incoming/nonexistent.tar.gz")
+            client.delete_file("/outgoing/nonexistent.tar.gz")
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
     def test_delete_error(self, mock_connect):
@@ -384,7 +384,7 @@ class TestSFTPClientDelete:
         )
 
         with pytest.raises(SFTPError, match="Failed to delete"):
-            client.delete_file("/incoming/file.tar.gz")
+            client.delete_file("/outgoing/file.tar.gz")
 
 
 class TestSFTPClientConnect:
