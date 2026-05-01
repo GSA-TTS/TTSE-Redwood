@@ -1,28 +1,6 @@
 ### Architecture Diagram: Controlled Data Sharing System
-                                      +-----------------+ 
-                                      |   PKI Server    |
-                                      | (Certificates,  |
-                                      | Key Management) |
-                                      +-----------------+
-                                             |
-                                             | (Provides secure communication infrastructure - TLS/SSL)
-                                             V
-     +----------------+             +-------------------+             +----------------+
-     |                |<----------->|   Policy Server   |<----------->|    Agent A     |
-     |   Login.gov    |   Request   | (Access Control,  | Validation  | (Data Extractor|
-     |                |    Auth     |  Validation Rules)| Requests    |  & Sender)     |
-     +----------------+             +-------------------+             +----------------+
-             ^                              ^      ^                          |
-             | Submit Request               |      | Orchestration/Commands   | Data Transfer
-             | (Secure)                     |      | (Secure)                 | (Secure)
-             V                              V      V                          V
-     +----------------+             +-------------------+             +----------------+
-     |  Event Server  |<--------------------------------------------->|    Agent B     |
-     | (Orchestration,|                                               | (Data Receiver |
-     |  Audit Log)    |                                               |  & Processor)  |
-     +----------------+                                               +----------------+
 
-     (Note: Agent A and Agent B represent multiple agents deployed at different agencies.)
+<img width="960" height="720" alt="Redwood System Architecture" src="https://github.com/user-attachments/assets/ad1891b8-6925-4ffa-bb9e-0674adca18dc" />
 
 
 ### Component Descriptions
