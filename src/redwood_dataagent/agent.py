@@ -1009,6 +1009,55 @@ def _process_single_receiver_transfer(
         return 1
 
 
+def _process_discovered_receiver_transfer(
+    landing_zone: "ReceiverLandingZone",
+    target_store: "ReceiverTargetStore",
+    config: AgentConfig,
+    sender_agency: str,
+    transfer_session_id: str,
+) -> tuple[str, dict[str, str]]:
+    """Process one discovered transfer and return its status with transfer metadata."""
+    transfer_ref = {
+        "sender_agency": sender_agency,
+        "transfer_session_id": transfer_session_id,
+    }
+
+    with logging_context(transfer_session_id):
+        # Pre-check target idempotency marker so already-complete transfers
+        # are not fetched/validated/decompressed again.
+        if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
+            LOGGER.debug(
+                prefix_log_message(
+                    f"Transfer from {sender_agency} already marked done in target; skipping.",
+                    agent_mode=config.agent_mode,
+                ),
+                extra={
+                    "event": "receiver_transfer_skip_done",
+                    "sender_agency": sender_agency,
+                    "transfer_session_id": transfer_session_id,
+                },
+            )
+            return "already_processed", transfer_ref
+
+        LOGGER.info(
+            prefix_log_message(
+                f"Processing transfer from {sender_agency}",
+                agent_mode=config.agent_mode,
+            ),
+            extra={
+                "event": "receiver_transfer_start",
+                "sender_agency": sender_agency,
+                "transfer_session_id": transfer_session_id,
+            },
+        )
+        result = _process_single_receiver_transfer(
+            landing_zone, target_store, config, sender_agency, transfer_session_id
+        )
+        if result == 0:
+            return "processed", transfer_ref
+        return "failed", transfer_ref
+
+
 def _create_receiver_workflow(config: AgentConfig) -> int:
     """Execute receiver-side transfer workflow.
 
@@ -1070,72 +1119,39 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             extra={"event": "receiver_senders_found", "sender_agencies": sender_agencies},
         )
 
-        processed = 0
-        already_processed = 0
-        failed = 0
-        processed_transfers: list[dict[str, str]] = []
-        already_processed_transfers: list[dict[str, str]] = []
-        failed_transfers: list[dict[str, str]] = []
+        status_counts: dict[str, int] = {
+            "processed": 0,
+            "already_processed": 0,
+            "failed": 0,
+        }
+        transfer_details: dict[str, list[dict[str, str]]] = {
+            "processed": [],
+            "already_processed": [],
+            "failed": [],
+        }
+
         for sender_agency in sender_agencies:
             transfer_sessions = _retry_operation(
                 f"list_pending_transfers_{sender_agency}",
                 lambda sa=sender_agency: landing_zone.list_pending_transfers(sa),
             )
             for transfer_session_id in transfer_sessions:
-                with logging_context(transfer_session_id):
-                    # Pre-check target idempotency marker so already-complete transfers
-                    # are not fetched/validated/decompressed again.
-                    if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
-                        already_processed += 1
-                        already_processed_transfers.append(
-                            {
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            }
-                        )
-                        LOGGER.debug(
-                            prefix_log_message(
-                                f"Transfer from {sender_agency} already marked done in target; skipping.",
-                                agent_mode=config.agent_mode,
-                            ),
-                            extra={
-                                "event": "receiver_transfer_skip_done",
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            },
-                        )
-                        continue
+                status, transfer_ref = _process_discovered_receiver_transfer(
+                    landing_zone=landing_zone,
+                    target_store=target_store,
+                    config=config,
+                    sender_agency=sender_agency,
+                    transfer_session_id=transfer_session_id,
+                )
+                status_counts[status] += 1
+                transfer_details[status].append(transfer_ref)
 
-                    LOGGER.info(
-                        prefix_log_message(
-                            f"Processing transfer from {sender_agency}",
-                            agent_mode=config.agent_mode,
-                        ),
-                        extra={
-                            "event": "receiver_transfer_start",
-                            "sender_agency": sender_agency,
-                            "transfer_session_id": transfer_session_id,
-                        },
-                    )
-                    result = _process_single_receiver_transfer(
-                        landing_zone, target_store, config, sender_agency, transfer_session_id
-                    )
-                    if result == 0:
-                        processed += 1
-                        processed_transfers.append(
-                            {
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            }
-                        )
-                    else:
-                        failed += 1
-                        failed_transfers.append(
-                            {
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            }
-                        )
+        processed = status_counts["processed"]
+        already_processed = status_counts["already_processed"]
+        failed = status_counts["failed"]
+        processed_transfers = transfer_details["processed"]
+        already_processed_transfers = transfer_details["already_processed"]
+        failed_transfers = transfer_details["failed"]
 
         recent_already_processed: list[dict[str, str]] = []
 

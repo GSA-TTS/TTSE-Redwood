@@ -346,11 +346,7 @@ class SFTPClient:
         ...     f"Uploaded {metadata['file_size_bytes']} bytes to {metadata['endpoint']}"
         ... )
         """
-        # Validate source file
-        if not source_path.exists():
-            raise SFTPError(f"Local file does not exist: {source_path}")
-        if not source_path.is_file():
-            raise SFTPError(f"Path is not a file: {source_path}")
+        self._validate_upload_source(source_path)
 
         file_size = source_path.stat().st_size
         attempt = 0
@@ -411,6 +407,14 @@ class SFTPClient:
                 raise SFTPError(
                     f"Failed to upload file to sftp://{connected_host or '(all endpoints)'}{remote_path}: {e}"
                 ) from e
+
+    def _validate_upload_source(self, source_path: Path) -> None:
+        """Validate upload source path points to an existing file."""
+        # Validate source file
+        if not source_path.exists():
+            raise SFTPError(f"Local file does not exist: {source_path}")
+        if not source_path.is_file():
+            raise SFTPError(f"Path is not a file: {source_path}")
 
     def file_exists(self, remote_path: str) -> bool:
         """Check if a file exists on the SFTP server.
