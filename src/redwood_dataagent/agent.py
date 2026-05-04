@@ -59,6 +59,7 @@ DEFAULT_DATA_FILE_NAME = "data.json"
 DEFAULT_ARCHIVE_FILE_NAME = "transfer.tar.gz"
 DEFAULT_MANIFEST_FILE_NAME = "manifest.json"
 DEFAULT_RETRY_ATTEMPTS = 3
+DONE_MARKER_SUFFIX = ".done"
 
 T = TypeVar("T")
 
@@ -93,12 +94,12 @@ def _build_processed_marker_key(key: str) -> str:
     """Build marker object key for a processed sender scan file."""
     sender_scan_prefix = SenderStoragePath.scan_prefix()
     if key.startswith(sender_scan_prefix):
-        return key.replace(sender_scan_prefix, "processed/", 1) + ".done"
+        return key.replace(sender_scan_prefix, "processed/", 1) + DONE_MARKER_SUFFIX
 
     if f"/{sender_scan_prefix}" in key:
-        return key.replace(f"/{sender_scan_prefix}", "/processed/", 1) + ".done"
+        return key.replace(f"/{sender_scan_prefix}", "/processed/", 1) + DONE_MARKER_SUFFIX
 
-    return f"processed/{Path(key).name}.done"
+    return f"processed/{Path(key).name}{DONE_MARKER_SUFFIX}"
 
 
 def _extract_data(config: AgentConfig) -> None:
@@ -157,7 +158,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
             file_name = Path(key).name
             
             # Skip if this is a marker file (.done files should not be processed)
-            if file_name.endswith(".done"):
+            if file_name.endswith(DONE_MARKER_SUFFIX):
                 LOGGER.debug(f"Skipping marker file: {key}")
                 continue
             
@@ -211,7 +212,7 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
             prefix = f"{prefix}/"
 
         processed_prefix = prefix.replace(SenderStoragePath.scan_prefix(), "processed/", 1)
-        marker_key = f"{processed_prefix}{file_name}.done"
+        marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
         timestamp = datetime.now(timezone.utc).isoformat()
         marker_metadata = {
             "processed_at": timestamp,
@@ -739,15 +740,12 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                     config.transfer_session_id,
                     artifact_path.name,
                 )
-                try:
-                    _retry_operation(
-                        "stage_upload",
-                        lambda: staging_client.upload_file(
-                            artifact_path, config.sender_staging_bucket, staging_key
-                        ),
-                    )
-                except Exception:
-                    raise
+                _retry_operation(
+                    "stage_upload",
+                    lambda artifact_path=artifact_path, staging_key=staging_key: staging_client.upload_file(
+                        artifact_path, config.sender_staging_bucket, staging_key
+                    ),
+                )
 
                 total_staged_bytes += artifact_path.stat().st_size
                 staged_artifacts.append((artifact_path, staging_key))
@@ -789,7 +787,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 try:
                     upload_metadata = _retry_operation(
                         "sftp_upload",
-                        lambda: sftp_client.upload_file(artifact_path, remote_path),
+                        lambda artifact_path=artifact_path, remote_path=remote_path: sftp_client.upload_file(artifact_path, remote_path),
                     )
                 except Exception as e:
                     log_sftp_transfer_complete(
@@ -851,7 +849,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 extra={
                     "event": "sender_file_marked",
                     "file_name": file_name,
-                    "marker_location": f"{config.sender_data_directory}../processed/{file_name}.done",
+                    "marker_location": f"{config.sender_data_directory}../processed/{file_name}{DONE_MARKER_SUFFIX}",
                 },
             )
 
@@ -971,7 +969,7 @@ def _process_single_receiver_transfer(
             )
 
         with tempfile.TemporaryDirectory(prefix="redwood-receiver-") as tmpdir:
-            extraction_metadata = _retry_operation(
+            _retry_operation(
                 "decompress",
                 lambda: landing_zone.decompress_archive(
                     archive_bytes=archive_bytes,
