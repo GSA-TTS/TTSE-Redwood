@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .exceptions import ConfigurationError
 from .storage.conventions import (
@@ -121,7 +121,7 @@ def load_config() -> AgentConfig:
     if os.getenv("TRANSFER_SESSION_ID"):
         transfer_session_id = os.getenv("TRANSFER_SESSION_ID")
     else:
-        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         session_uuid = str(uuid.uuid4())[:8]
         transfer_session_id = f"{timestamp}-{session_uuid}"
 
