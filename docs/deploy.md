@@ -4,7 +4,7 @@ This guide is for third-party agencies deploying the Redwood Data Agent containe
 
 The same image supports two roles:
 
-- Sender: reads incoming files from object storage, prepares transfer artifacts, and runs sender workflow.
+- Sender: reads outgoing files from object storage, prepares transfer artifacts, and runs sender workflow.
 - Receiver: reads transfer artifacts from landing storage, validates/decompresses, and stores to target storage.
 
 ## 1. Deployment Model
@@ -73,7 +73,7 @@ Bucket names are derived by code using:
 
 Key path conventions used by workflows:
 
-- Sender scan prefix: `incoming/`
+- Sender scan prefix: `outgoing/`
 - Sender transfer artifacts: `transfers/{transfer_session_id}/...`
 - Receiver marker/idempotency objects under transfer prefixes
 
@@ -85,7 +85,7 @@ Grant the workload identity least-privilege access to only required buckets/pref
 
 Sender typically needs:
 
-- Read/list from sender incoming/staging prefixes.
+- Read/list from sender outgoing/staging prefixes.
 - Write for generated artifacts and sender marker objects.
 
 Receiver typically needs:
@@ -212,7 +212,7 @@ For both sender and receiver:
 
 Sender checks:
 
-- Agent can list/read `incoming/` prefix.
+- Agent can list/read `outgoing/` prefix.
 - Transfer artifacts are written to expected `transfers/{session}/` path.
 
 Receiver checks:

@@ -375,7 +375,7 @@ class SFTPClient:
         source_path : Path
             Local file path in container filesystem to upload
         remote_path : str
-            Destination path on SFTP server (e.g. "/incoming/transfers/file.tar.gz")
+            Destination path on SFTP server (e.g. "/outgoing/transfers/file.tar.gz")
 
         Returns
         -------
