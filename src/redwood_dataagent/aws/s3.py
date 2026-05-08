@@ -9,6 +9,7 @@ Supports sender and receiver storage buckets with error handling and logging.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,26 @@ from ..exceptions import StorageError
 from ..logging_utils import get_logger
 
 LOGGER = get_logger("redwood_dataagent")
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    """Return a positive integer env var value, falling back to default when invalid."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        parsed = int(raw_value)
+        if parsed > 0:
+            return parsed
+    except ValueError:
+        pass
+
+    LOGGER.warning(
+        "Invalid environment value for transfer tuning; using default",
+        extra={"event": "s3_transfer_env_invalid", "name": name, "value": raw_value, "default": default},
+    )
+    return default
 
 
 class S3Client:
@@ -40,12 +61,54 @@ class S3Client:
         ----------
         aws_region : str, optional
             AWS region for SDK operations. Defaults to "us-east-1".
+
+        Environment-based transfer tuning
+        ---------------------------------
+        S3_MULTIPART_THRESHOLD_MB
+            Multipart transfer threshold in MB. Default: 64.
+        S3_MULTIPART_CHUNKSIZE_MB
+            Multipart chunk size in MB. Default: 64.
+        S3_TRANSFER_MAX_CONCURRENCY
+            Maximum concurrent transfer threads. Default: 8.
+        S3_TRANSFER_DOWNLOAD_ATTEMPTS
+            Number of download attempts per transfer. Default: 5.
         """
         try:
             import boto3
+            try:
+                from boto3.s3.transfer import TransferConfig
+            except Exception:
+                # Test environments may mock boto3 without package submodules.
+                class TransferConfig:  # type: ignore[no-redef]
+                    def __init__(self, **_: object):
+                        pass
+
+            multipart_threshold_mb = _get_positive_int_env("S3_MULTIPART_THRESHOLD_MB", 64)
+            multipart_chunksize_mb = _get_positive_int_env("S3_MULTIPART_CHUNKSIZE_MB", 64)
+            max_concurrency = _get_positive_int_env("S3_TRANSFER_MAX_CONCURRENCY", 8)
+            download_attempts = _get_positive_int_env("S3_TRANSFER_DOWNLOAD_ATTEMPTS", 5)
+
+            self._transfer_config = TransferConfig(
+                multipart_threshold=multipart_threshold_mb * 1024 * 1024,
+                multipart_chunksize=multipart_chunksize_mb * 1024 * 1024,
+                max_concurrency=max_concurrency,
+                num_download_attempts=download_attempts,
+            )
 
             self._client: BotoS3Client = boto3.client("s3", region_name=aws_region)
             self._region = aws_region
+
+            LOGGER.debug(
+                "Initialized S3 transfer configuration",
+                extra={
+                    "event": "s3_transfer_config_initialized",
+                    "region": aws_region,
+                    "multipart_threshold_mb": multipart_threshold_mb,
+                    "multipart_chunksize_mb": multipart_chunksize_mb,
+                    "max_concurrency": max_concurrency,
+                    "download_attempts": download_attempts,
+                },
+            )
         except ImportError as e:
             raise ImportError(
                 "boto3 is required for S3 operations. Install with: pip install boto3"
@@ -85,7 +148,12 @@ class S3Client:
         """
         try:
             destination_path.parent.mkdir(parents=True, exist_ok=True)
-            self._client.download_file(bucket, key, str(destination_path))
+            self._client.download_file(
+                bucket,
+                key,
+                str(destination_path),
+                Config=self._transfer_config,
+            )
             LOGGER.debug(
                 "Downloaded S3 object",
                 extra={
@@ -147,7 +215,12 @@ class S3Client:
             if not source_path.is_file():
                 raise StorageError(f"Path is not a file: {source_path}")
 
-            self._client.upload_file(str(source_path), bucket, key)
+            self._client.upload_file(
+                str(source_path),
+                bucket,
+                key,
+                Config=self._transfer_config,
+            )
             LOGGER.debug(
                 "Uploaded file to S3",
                 extra={

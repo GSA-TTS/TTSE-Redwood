@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from pathlib import Path
 from time import sleep
 from typing import Optional
@@ -17,6 +18,32 @@ from redwood_dataagent.exceptions import SFTPError
 from redwood_dataagent.logging_utils import get_logger
 
 LOGGER = get_logger(__name__)
+
+# Default chunk size for SFTP uploads (32 MB). Suitable for 10–50 GB files;
+# smaller chunks reduce lost-progress on retry, larger chunks improve throughput.
+_DEFAULT_SFTP_CHUNK_SIZE_MB = 32
+# Default connection/socket timeout in seconds for large-file transfers.
+_DEFAULT_SFTP_TIMEOUT = 60
+# Default max retry attempts for transient SFTP failures.
+_DEFAULT_SFTP_MAX_RETRIES = 5
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    """Return a positive integer env var value, falling back to default when invalid."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed = int(raw_value)
+        if parsed > 0:
+            return parsed
+    except ValueError:
+        pass
+    LOGGER.warning(
+        "Invalid environment value for SFTP tuning; using default",
+        extra={"event": "sftp_env_invalid", "name": name, "value": raw_value, "default": default},
+    )
+    return default
 
 
 class SFTPClient:
@@ -49,11 +76,18 @@ class SFTPClient:
     port : int
         SSH/SFTP port (default: 22)
     timeout : int
-        Connection timeout in seconds (default: 30)
+        Connection and socket timeout in seconds (default: env ``SFTP_TIMEOUT``, else 60).
+        Applied both at connect time and as a socket-level timeout to prevent
+        silent stalls during large-file uploads.
     max_retries : int
-        Maximum retry attempts on transient failures (default: 3)
+        Maximum retry attempts on transient failures
+        (default: env ``SFTP_MAX_RETRIES``, else 5).
     retry_backoff : float
         Base backoff multiplier for exponential retry (default: 2.0)
+    chunk_size_mb : int
+        Upload chunk size in MB used for streamed writes (default: env
+        ``SFTP_CHUNK_SIZE_MB``, else 32). Larger values improve throughput;
+        smaller values reduce data re-sent on retry.
 
     Raises
     ------
@@ -90,9 +124,10 @@ class SFTPClient:
         key_path: Optional[Path] = None,
         password: Optional[str] = None,
         port: int = 22,
-        timeout: int = 30,
-        max_retries: int = 3,
+        timeout: Optional[int] = None,
+        max_retries: Optional[int] = None,
         retry_backoff: float = 2.0,
+        chunk_size_mb: Optional[int] = None,
     ) -> None:
         """Initialize SFTP client with multi-endpoint support."""
         # Lazy import for testing flexibility
@@ -107,16 +142,22 @@ class SFTPClient:
 
         if not hosts:
             raise SFTPError("hosts list cannot be empty")
-        
+
+        # Resolve env-driven defaults so agencies can tune without code changes.
+        resolved_timeout = timeout if timeout is not None else _get_positive_int_env("SFTP_TIMEOUT", _DEFAULT_SFTP_TIMEOUT)
+        resolved_max_retries = max_retries if max_retries is not None else _get_positive_int_env("SFTP_MAX_RETRIES", _DEFAULT_SFTP_MAX_RETRIES)
+        resolved_chunk_size_mb = chunk_size_mb if chunk_size_mb is not None else _get_positive_int_env("SFTP_CHUNK_SIZE_MB", _DEFAULT_SFTP_CHUNK_SIZE_MB)
+
         self._hosts = hosts
         self._port = port
         self._username = username
         self._password = password
         self._key_path = key_path
         self._key_content = key_content
-        self._timeout = timeout
-        self._max_retries = max_retries
+        self._timeout = resolved_timeout
+        self._max_retries = resolved_max_retries
         self._retry_backoff = retry_backoff
+        self._chunk_size = resolved_chunk_size_mb * 1024 * 1024
         self._transport = None
         self._connected_host = None
 
@@ -142,6 +183,9 @@ class SFTPClient:
                     "key" if (key_path or key_content) else "password"
                 ),
                 "num_endpoints": len(hosts),
+                "timeout_seconds": self._timeout,
+                "max_retries": self._max_retries,
+                "chunk_size_mb": resolved_chunk_size_mb,
             },
         )
 
@@ -232,6 +276,18 @@ class SFTPClient:
                         timeout=self._timeout,
                     )
 
+                # Apply socket-level timeout so large-file stalls
+                # are detected and trigger a retry instead of hanging.
+                transport = ssh.get_transport()
+                if transport is not None:
+                    transport.set_keepalive(30)  # send keepalive every 30s
+                    sock = transport.sock
+                    if sock is not None:
+                        try:
+                            sock.settimeout(self._timeout)
+                        except OSError:
+                            pass  # best-effort; may not apply on all platforms
+
                 sftp = ssh.open_sftp()
                 LOGGER.debug(
                     "Successfully connected to SFTP endpoint",
@@ -302,7 +358,7 @@ class SFTPClient:
         ) from last_error
 
     def upload_file(
-        self, source_path: Path, remote_path: str, chunk_size: int = 32768
+        self, source_path: Path, remote_path: str
     ) -> dict:
         """Upload a file from container filesystem to SFTP server.
 
@@ -310,14 +366,16 @@ class SFTPClient:
         connection reset) and failover to alternate endpoints. Performs validation
         that source file exists before upload.
 
+        Uses chunked streaming via ``sftp.open()`` with the configured
+        ``chunk_size_mb`` so large files (10–50 GB) do not require buffering
+        the entire file in memory and stall timeouts are detected per chunk.
+
         Parameters
         ----------
         source_path : Path
             Local file path in container filesystem to upload
         remote_path : str
             Destination path on SFTP server (e.g. "/outgoing/transfers/file.tar.gz")
-        chunk_size : int
-            Upload buffer size in bytes (default: 32KB)
 
         Returns
         -------
@@ -357,8 +415,18 @@ class SFTPClient:
             try:
                 sftp = self._connect()
                 connected_host = self._connected_host or self._hosts[0]
-                
-                sftp.put(str(source_path), remote_path, callback=None)
+
+                # Stream upload in configurable chunks so large files do not
+                # buffer fully in memory and per-chunk timeouts are enforced.
+                with open(source_path, "rb") as local_fh:
+                    with sftp.open(remote_path, "wb") as remote_fh:
+                        remote_fh.set_pipelined(True)
+                        while True:
+                            chunk = local_fh.read(self._chunk_size)
+                            if not chunk:
+                                break
+                            remote_fh.write(chunk)
+
                 sftp.close()
 
                 LOGGER.debug(
@@ -369,6 +437,7 @@ class SFTPClient:
                         "remote_path": remote_path,
                         "source_path": str(source_path),
                         "file_size_bytes": file_size,
+                        "chunk_size_bytes": self._chunk_size,
                         "attempts": attempt,
                     },
                 )

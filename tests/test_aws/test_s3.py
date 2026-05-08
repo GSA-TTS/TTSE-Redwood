@@ -74,7 +74,12 @@ class TestS3ClientDownload:
         destination_file.write_text('{"test": "data"}')
         
         client.download_file("test-bucket", "path/to/file.json", destination_file)
-        mock_s3_client.download_file.assert_called_once_with("test-bucket", "path/to/file.json", str(destination_file))
+        mock_s3_client.download_file.assert_called_once_with(
+            "test-bucket",
+            "path/to/file.json",
+            str(destination_file),
+            Config=mock.ANY,
+        )
 
     def test_download_file_creates_parent_directory(self, mock_boto3_client, tmp_path):
         """Test download creates parent directories if needed."""
@@ -104,7 +109,12 @@ class TestS3ClientUpload:
         mock_s3_client = mock_boto3_client.client.return_value
         
         client.upload_file(source_file, "test-bucket", "path/to/file.json")
-        mock_s3_client.upload_file.assert_called_once_with(str(source_file), "test-bucket", "path/to/file.json")
+        mock_s3_client.upload_file.assert_called_once_with(
+            str(source_file),
+            "test-bucket",
+            "path/to/file.json",
+            Config=mock.ANY,
+        )
 
     def test_upload_file_not_exists(self, mock_boto3_client, tmp_path):
         """Test upload fails when local file does not exist."""

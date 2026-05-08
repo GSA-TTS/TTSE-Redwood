@@ -30,6 +30,41 @@ class TestSFTPClientInit:
         assert client._password == "secret-pass"
         assert client._timeout == 60
 
+    def test_init_defaults_from_env(self, monkeypatch):
+        """Test initialization reads timeout, retries, and chunk size from env."""
+        monkeypatch.setenv("SFTP_TIMEOUT", "120")
+        monkeypatch.setenv("SFTP_MAX_RETRIES", "7")
+        monkeypatch.setenv("SFTP_CHUNK_SIZE_MB", "64")
+
+        client = SFTPClient(
+            hosts=["receiver.example.com"],
+            username="sender",
+            password="secret",
+        )
+
+        assert client._timeout == 120
+        assert client._max_retries == 7
+        assert client._chunk_size == 64 * 1024 * 1024
+
+    def test_init_explicit_values_override_env(self, monkeypatch):
+        """Explicit constructor values take precedence over env vars."""
+        monkeypatch.setenv("SFTP_TIMEOUT", "999")
+        monkeypatch.setenv("SFTP_MAX_RETRIES", "99")
+        monkeypatch.setenv("SFTP_CHUNK_SIZE_MB", "128")
+
+        client = SFTPClient(
+            hosts=["receiver.example.com"],
+            username="sender",
+            password="secret",
+            timeout=45,
+            max_retries=2,
+            chunk_size_mb=16,
+        )
+
+        assert client._timeout == 45
+        assert client._max_retries == 2
+        assert client._chunk_size == 16 * 1024 * 1024
+
     def test_init_with_multiple_hosts(self):
         """Test initialization with multiple hosts."""
         hosts = ["10.0.1.50", "10.0.2.50", "10.0.3.50"]
@@ -103,8 +138,11 @@ class TestSFTPClientUpload:
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
     def test_upload_success(self, mock_connect, tmp_path):
-        """Test successful file upload."""
+        """Test successful file upload uses chunked streaming via sftp.open()."""
         mock_sftp = mock.MagicMock()
+        mock_remote_fh = mock.MagicMock()
+        mock_sftp.open.return_value.__enter__ = mock.Mock(return_value=mock_remote_fh)
+        mock_sftp.open.return_value.__exit__ = mock.Mock(return_value=False)
         mock_connect.return_value = mock_sftp
 
         source_file = tmp_path / "archive.tar.gz"
@@ -122,7 +160,9 @@ class TestSFTPClientUpload:
         assert metadata["file_size_bytes"] == 7
         assert metadata["attempts"] == 1
         assert metadata["endpoint"] == "receiver.example.com"
-        mock_sftp.put.assert_called_once()
+        # Must use sftp.open() for chunked streaming, not sftp.put()
+        mock_sftp.open.assert_called_once_with("/outgoing/archive.tar.gz", "wb")
+        mock_sftp.put.assert_not_called()
         mock_sftp.close.assert_called_once()
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
@@ -447,7 +487,7 @@ class TestSFTPClientConnect:
             port=2222,
             username="testuser",
             key_filename=str(key_file),
-            timeout=30,
+            timeout=60,
         )
 
     @mock.patch("paramiko.RSAKey")
@@ -663,14 +703,14 @@ class TestSFTPClientConnect:
             port=22,
             username="testuser",
             password="secret",
-            timeout=30,
+            timeout=60,
         )
         mock_ssh_works.connect.assert_called_once_with(
             "10.0.2.50",
             port=22,
             username="testuser",
             password="secret",
-            timeout=30,
+            timeout=60,
         )
         # Verify both endpoints were attempted
         assert mock_ssh_class.call_count == 2
@@ -705,7 +745,7 @@ class TestSFTPClientConnect:
                 port=22,
                 username="testuser",
                 password="secret",
-                timeout=30,
+                timeout=60,
             )
         
         # Verify all endpoints were attempted
