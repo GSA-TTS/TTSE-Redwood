@@ -28,6 +28,8 @@ from redwood_dataagent.aws.s3 import S3Client
 
 _logger = logging.getLogger(__name__)
 
+_STREAM_CHUNK_SIZE = 8 * 1024 * 1024
+
 
 class ReceiverLandingZone:
     """Receiver agent for landing zone ingest and validation.
@@ -127,16 +129,20 @@ class ReceiverLandingZone:
         transfer_session_id: str,
         sender_agency: str,
         receiver_agency: str,
-    ) -> tuple[bytes, dict]:
+        target_directory: Optional[Path] = None,
+    ) -> tuple[Path | bytes, dict]:
         """Download archive and manifest from S3 landing zone.
 
         Args:
             transfer_session_id: Unique transfer correlation ID
             sender_agency: Sending agency code
             receiver_agency: Receiving agency code
+                target_directory: Optional directory for streaming archive download.
+                    If provided, archive is streamed to disk and returned as ``Path``.
+                    If omitted, archive is returned as bytes for backward compatibility.
 
         Returns:
-            Tuple of (archive_bytes, manifest_dict)
+            Tuple of (archive_path_or_bytes, manifest_dict)
 
         Raises:
             StorageError: If S3 download fails
@@ -158,8 +164,15 @@ class ReceiverLandingZone:
             manifest_bytes = self._download_from_s3(manifest_key, "manifest.json")
             manifest_dict = json.loads(manifest_bytes.decode("utf-8"))
 
-            # Download archive
-            archive_bytes = self._download_from_s3(archive_key, "transfer.tar.gz")
+            if target_directory is not None:
+                target_directory.mkdir(parents=True, exist_ok=True)
+                archive_path = target_directory / "transfer.tar.gz"
+                archive_size = self._download_to_file(archive_key, "transfer.tar.gz", archive_path)
+                archive_payload: Path | bytes = archive_path
+            else:
+                archive_bytes = self._download_from_s3(archive_key, "transfer.tar.gz")
+                archive_size = len(archive_bytes)
+                archive_payload = archive_bytes
 
             # Log successful receiver fetch from landing storage.
             log_event(
@@ -169,15 +182,15 @@ class ReceiverLandingZone:
                 receiver_agency=receiver_agency,
                 stage="receiver",
                 outcome=EventOutcome.SUCCESS,
-                bytes_transferred=len(archive_bytes),
+                bytes_transferred=archive_size,
                 details={
                     "action": "landing_fetch_complete",
-                    "archive_size_bytes": len(archive_bytes),
+                    "archive_size_bytes": archive_size,
                     "manifest_size_bytes": len(manifest_bytes),
                 },
             )
 
-            return archive_bytes, manifest_dict
+            return archive_payload, manifest_dict
 
         except StorageError:
             raise
@@ -201,16 +214,18 @@ class ReceiverLandingZone:
     def validate_manifest(
         self,
         manifest_dict: dict,
-        archive_bytes: bytes,
         transfer_session_id: str,
         sender_agency: str,
         receiver_agency: str,
+        archive_bytes: Optional[bytes] = None,
+        archive_path: Optional[Path] = None,
     ) -> TransferManifest:
         """Validate manifest and verify archive checksum.
 
         Args:
             manifest_dict: Parsed manifest JSON
-            archive_bytes: Archive file content
+            archive_bytes: Archive file content in memory (legacy compatibility)
+            archive_path: Archive file path on disk (preferred for large files)
             transfer_session_id: Transfer correlation ID
             sender_agency: Sending agency code
             receiver_agency: Receiving agency code
@@ -229,8 +244,14 @@ class ReceiverLandingZone:
             # Parse and validate manifest structure
             manifest = TransferManifest(**manifest_dict_normalized)
 
-            # Verify archive checksum against manifest
-            archive_checksum = hashlib.sha256(archive_bytes).hexdigest()
+            if archive_path is not None:
+                archive_checksum = self._compute_sha256_for_file(archive_path)
+            elif archive_bytes is not None:
+                archive_checksum = hashlib.sha256(archive_bytes).hexdigest()
+            else:
+                raise ManifestValidationError(
+                    "Either archive_path or archive_bytes must be provided"
+                )
 
             # Manifest should have 2 entries: source file + archive
             # First entry: original source file (file_name, file_size_bytes, checksum_sha256)
@@ -289,16 +310,18 @@ class ReceiverLandingZone:
 
     def decompress_archive(
         self,
-        archive_bytes: bytes,
         target_directory: Optional[Path] = None,
         transfer_session_id: Optional[str] = None,
         sender_agency: Optional[str] = None,
         receiver_agency: Optional[str] = None,
+        archive_bytes: Optional[bytes] = None,
+        archive_path: Optional[Path] = None,
     ) -> dict:
         """Decompress tar.gz archive to working directory.
 
         Args:
-            archive_bytes: Archive file content in bytes
+            archive_bytes: Archive file content in bytes (legacy compatibility)
+            archive_path: Archive file path on disk (preferred for large files)
             target_directory: Directory to extract to. If None, use temp directory.
             transfer_session_id: Transfer correlation ID (for audit logging)
             sender_agency: Sending agency code (for audit logging)
@@ -321,11 +344,19 @@ class ReceiverLandingZone:
             else:
                 target_directory.mkdir(parents=True, exist_ok=True)
 
+            if archive_path is None and archive_bytes is None:
+                raise StorageError("Either archive_path or archive_bytes must be provided")
+
             # Extract tar.gz
             extracted_files = []
             total_bytes = 0
 
-            with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:  # NOSONAR
+            if archive_path is not None:
+                tar_context = tarfile.open(name=str(archive_path), mode="r:gz")  # NOSONAR
+            else:
+                tar_context = tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz")  # NOSONAR
+
+            with tar_context as tar:
                 for member in tar.getmembers():
                     if member.isfile():
                         extracted_path = target_directory / member.name
@@ -418,3 +449,38 @@ class ReceiverLandingZone:
             error_msg = f"Failed to download {file_type} from s3://{self.landing_bucket}/{s3_key}: {str(e)}"
             _logger.error(error_msg)
             raise StorageError(error_msg) from e
+
+    def _download_to_file(self, s3_key: str, file_type: str, destination_path: Path) -> int:
+        """Stream an S3 object directly to disk and return bytes written."""
+        try:
+            response = self.s3_client._client.get_object(
+                Bucket=self.landing_bucket,
+                Key=s3_key,
+            )
+            body = response["Body"]
+            bytes_written = 0
+
+            with destination_path.open("wb") as destination:
+                while True:
+                    chunk = body.read(_STREAM_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    destination.write(chunk)
+                    bytes_written += len(chunk)
+
+            return bytes_written
+        except Exception as e:
+            error_msg = f"Failed to download {file_type} from s3://{self.landing_bucket}/{s3_key}: {str(e)}"
+            _logger.error(error_msg)
+            raise StorageError(error_msg) from e
+
+    def _compute_sha256_for_file(self, file_path: Path) -> str:
+        """Compute SHA256 hash for a file using streaming chunks."""
+        digest = hashlib.sha256()
+        with file_path.open("rb") as handle:
+            while True:
+                chunk = handle.read(_STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()

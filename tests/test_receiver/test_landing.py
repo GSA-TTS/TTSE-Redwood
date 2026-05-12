@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import tarfile
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -118,6 +119,47 @@ class TestReceiverLandingZoneFetch:
         assert manifest_dict["transfer_session_id"] == "transfer-20260406-001"
         assert receiver_landing_zone.s3_client._client.get_object.call_count == 2
 
+    def test_fetch_success_streams_archive_to_disk(
+        self, receiver_landing_zone, sample_archive, sample_manifest, tmp_path
+    ):
+        """Test successful fetch streams archive to a disk path when target_directory is provided."""
+        manifest_bytes = json.dumps(sample_manifest).encode("utf-8")
+
+        manifest_response = {"Body": mock.MagicMock()}
+        manifest_response["Body"].read.return_value = manifest_bytes
+
+        archive_response = {"Body": mock.MagicMock()}
+
+        chunks = [sample_archive[:10], sample_archive[10:]]
+
+        def body_read(size):
+            if chunks:
+                return chunks.pop(0)
+            return b""
+
+        archive_response["Body"].read.side_effect = body_read
+
+        def get_object_side_effect(**kwargs):
+            if "manifest.json" in kwargs["Key"]:
+                return manifest_response
+            if "transfer.tar.gz" in kwargs["Key"]:
+                return archive_response
+            raise ValueError(f"Unexpected key: {kwargs['Key']}")
+
+        receiver_landing_zone.s3_client._client.get_object.side_effect = get_object_side_effect
+
+        archive_payload, manifest_dict = receiver_landing_zone.fetch_from_landing_bucket(
+            transfer_session_id="transfer-20260406-001",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            target_directory=tmp_path,
+        )
+
+        assert isinstance(archive_payload, Path)
+        assert archive_payload.exists()
+        assert archive_payload.read_bytes() == sample_archive
+        assert manifest_dict["transfer_session_id"] == "transfer-20260406-001"
+
     def test_fetch_missing_manifest(self, receiver_landing_zone):
         """Test fetch fails when manifest is not found in S3."""
         receiver_landing_zone.s3_client._client.get_object.side_effect = Exception(
@@ -163,6 +205,23 @@ class TestReceiverLandingZoneValidate:
         assert manifest.transfer_session_id == "transfer-20260406-001"
         assert manifest.sender_agency == "dot"
         assert manifest.receiver_agency == "gsa"
+
+    def test_validate_manifest_success_from_archive_path(
+        self, receiver_landing_zone, sample_archive, sample_manifest, tmp_path
+    ):
+        """Test successful manifest validation using streamed archive file path."""
+        archive_path = tmp_path / "transfer.tar.gz"
+        archive_path.write_bytes(sample_archive)
+
+        manifest = receiver_landing_zone.validate_manifest(
+            manifest_dict=sample_manifest,
+            transfer_session_id="transfer-20260406-001",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            archive_path=archive_path,
+        )
+
+        assert manifest.transfer_session_id == "transfer-20260406-001"
 
     def test_validate_manifest_checksum_mismatch(
         self, receiver_landing_zone, sample_archive, sample_manifest
@@ -238,6 +297,26 @@ class TestReceiverLandingZoneDecompress:
         assert metadata["file_count"] == 1
         assert metadata["total_bytes"] == 11  # "hello world"
         assert "sample.txt" in metadata["extracted_files"]
+        assert (extract_dir / "sample.txt").exists()
+
+    def test_decompress_success_from_archive_path(self, receiver_landing_zone, sample_archive, tmp_path):
+        """Test successful archive decompression from on-disk tar.gz path."""
+        archive_path = tmp_path / "transfer.tar.gz"
+        archive_path.write_bytes(sample_archive)
+
+        extract_dir = tmp_path / "extract-from-path"
+        extract_dir.mkdir()
+
+        metadata = receiver_landing_zone.decompress_archive(
+            archive_path=archive_path,
+            target_directory=extract_dir,
+            transfer_session_id="transfer-20260406-001",
+            sender_agency="dot",
+            receiver_agency="gsa",
+        )
+
+        assert metadata["file_count"] == 1
+        assert metadata["total_bytes"] == 11
         assert (extract_dir / "sample.txt").exists()
 
 

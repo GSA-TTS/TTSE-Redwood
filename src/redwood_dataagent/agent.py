@@ -936,54 +936,62 @@ def _process_single_receiver_transfer(
         0 on success, 1 on failure.
     """
     try:
-        archive_bytes, manifest_dict = _retry_operation(
-            "landing_fetch",
-            lambda: landing_zone.fetch_from_landing_bucket(
-                transfer_session_id=transfer_session_id,
-                sender_agency=sender_agency,
-                receiver_agency=config.receiver_agency,
-            ),
-        )
-
-        manifest = _retry_operation(
-            "manifest_validate",
-            lambda: landing_zone.validate_manifest(
-                manifest_dict=manifest_dict,
-                archive_bytes=archive_bytes,
-                transfer_session_id=transfer_session_id,
-                sender_agency=sender_agency,
-                receiver_agency=config.receiver_agency,
-            ),
-        )
-
-        # Guardrail: manifest identity must match what we discovered from S3.
-        if manifest.transfer_session_id != transfer_session_id:
-            raise StorageError(
-                "Manifest transfer_session_id mismatch: "
-                f"expected {transfer_session_id}, got {manifest.transfer_session_id}"
-            )
-        if manifest.receiver_agency and manifest.receiver_agency != config.receiver_agency:
-            raise StorageError(
-                "Manifest receiver_agency mismatch: "
-                f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
-            )
-
         with tempfile.TemporaryDirectory(prefix="redwood-receiver-") as tmpdir:
-            _retry_operation(
-                "decompress",
-                lambda: landing_zone.decompress_archive(
-                    archive_bytes=archive_bytes,
-                    target_directory=Path(tmpdir),
+            work_dir = Path(tmpdir)
+            archive_payload, manifest_dict = _retry_operation(
+                "landing_fetch",
+                lambda: landing_zone.fetch_from_landing_bucket(
                     transfer_session_id=transfer_session_id,
                     sender_agency=sender_agency,
                     receiver_agency=config.receiver_agency,
+                    target_directory=work_dir,
+                ),
+            )
+
+            archive_path = archive_payload if isinstance(archive_payload, Path) else None
+            archive_bytes = archive_payload if isinstance(archive_payload, bytes) else None
+
+            manifest = _retry_operation(
+                "manifest_validate",
+                lambda: landing_zone.validate_manifest(
+                    manifest_dict=manifest_dict,
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    archive_bytes=archive_bytes,
+                    archive_path=archive_path,
+                ),
+            )
+
+            # Guardrail: manifest identity must match what we discovered from S3.
+            if manifest.transfer_session_id != transfer_session_id:
+                raise StorageError(
+                    "Manifest transfer_session_id mismatch: "
+                    f"expected {transfer_session_id}, got {manifest.transfer_session_id}"
+                )
+            if manifest.receiver_agency and manifest.receiver_agency != config.receiver_agency:
+                raise StorageError(
+                    "Manifest receiver_agency mismatch: "
+                    f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
+                )
+
+            extract_dir = work_dir / "extracted"
+            _retry_operation(
+                "decompress",
+                lambda: landing_zone.decompress_archive(
+                    target_directory=extract_dir,
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    archive_bytes=archive_bytes,
+                    archive_path=archive_path,
                 ),
             )
 
             _retry_operation(
                 "store_to_target",
                 lambda: target_store.store_to_target(
-                    extracted_files_dir=Path(tmpdir),
+                    extracted_files_dir=extract_dir,
                     transfer_session_id=transfer_session_id,
                     sender_agency=sender_agency,
                     receiver_agency=config.receiver_agency,
