@@ -371,18 +371,18 @@ def test_load_config_sender_data_directory_ignores_env_override(
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
-    monkeypatch.setenv("SENDER_DATA_DIRECTORY", "s3://bucket/incoming/")
+    monkeypatch.setenv("SENDER_DATA_DIRECTORY", "s3://bucket/outgoing/")
     monkeypatch.setenv("ENVIRONMENT", "dev")
 
     config = load_config()
 
-    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/incoming/"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/outgoing/"
 
 
 def test_load_config_sender_data_directory_derived_from_sender_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sender data directory defaults to the derived sender staging incoming prefix."""
+    """Sender data directory defaults to the derived sender staging outgoing prefix."""
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
@@ -391,7 +391,7 @@ def test_load_config_sender_data_directory_derived_from_sender_bucket(
     config = load_config()
 
     assert config.sender_staging_bucket == "tts-core-dev-dot-data-staging"
-    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/incoming/"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/outgoing/"
 
 
 # ---------------------------------------------------------------------------
