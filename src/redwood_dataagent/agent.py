@@ -59,6 +59,7 @@ DEFAULT_DATA_FILE_NAME = "data.json"
 DEFAULT_ARCHIVE_FILE_NAME = "transfer.tar.gz"
 DEFAULT_MANIFEST_FILE_NAME = "manifest.json"
 DEFAULT_RETRY_ATTEMPTS = 3
+DONE_MARKER_SUFFIX = ".done"
 
 T = TypeVar("T")
 
@@ -90,14 +91,15 @@ def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: 
 
 
 def _build_processed_marker_key(key: str) -> str:
-    """Build marker object key for a processed incoming file."""
-    if key.startswith("incoming/"):
-        return key.replace("incoming/", "processed/", 1) + ".done"
+    """Build marker object key for a processed sender scan file."""
+    sender_scan_prefix = SenderStoragePath.scan_prefix()
+    if key.startswith(sender_scan_prefix):
+        return key.replace(sender_scan_prefix, "processed/", 1) + DONE_MARKER_SUFFIX
 
-    if "/incoming/" in key:
-        return key.replace("/incoming/", "/processed/", 1) + ".done"
+    if f"/{sender_scan_prefix}" in key:
+        return key.replace(f"/{sender_scan_prefix}", "/processed/", 1) + DONE_MARKER_SUFFIX
 
-    return f"processed/{Path(key).name}.done"
+    return f"processed/{Path(key).name}{DONE_MARKER_SUFFIX}"
 
 
 def _extract_data(config: AgentConfig) -> None:
@@ -115,7 +117,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
     Parameters
     ----------
     directory_path : str
-        S3 directory path (e.g., s3://bucket/incoming/)
+        S3 directory path (e.g., s3://bucket/outgoing/)
     aws_region : str
         AWS region for S3 access
 
@@ -140,7 +142,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
         bucket, prefix = parsed
         client = S3Client(aws_region=aws_region)
         
-        # List objects in the incoming directory
+        # List objects in the configured sender scan directory
         response = client._client.list_objects_v2(Bucket=bucket, Prefix=prefix)
         files = []
         
@@ -156,12 +158,11 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
             file_name = Path(key).name
             
             # Skip if this is a marker file (.done files should not be processed)
-            if file_name.endswith(".done"):
+            if file_name.endswith(DONE_MARKER_SUFFIX):
                 LOGGER.debug(f"Skipping marker file: {key}")
                 continue
             
             # Check if file has been processed (marker exists in processed/)
-            # Construct absolute path: replace 'incoming/' with 'processed/'
             processed_marker_key = _build_processed_marker_key(key)
             try:
                 client._client.head_object(Bucket=bucket, Key=processed_marker_key)
@@ -187,7 +188,7 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
     file_name : str
         Name of the file that was processed
     directory_path : str
-        S3 directory path (e.g., s3://bucket/incoming/)
+        S3 directory path (e.g., s3://bucket/outgoing/)
     aws_region : str
         AWS region for S3 access
 
@@ -207,12 +208,11 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
         client = S3Client(aws_region=aws_region)
         
         # Create marker in processed/ directory using absolute path
-        # Replace 'incoming/' with 'processed/' in the prefix
         if not prefix.endswith("/"):
             prefix = f"{prefix}/"
 
-        processed_prefix = prefix.replace("incoming/", "processed/", 1)
-        marker_key = f"{processed_prefix}{file_name}.done"
+        processed_prefix = prefix.replace(SenderStoragePath.scan_prefix(), "processed/", 1)
+        marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
         timestamp = datetime.now(timezone.utc).isoformat()
         marker_metadata = {
             "processed_at": timestamp,
@@ -500,7 +500,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             LOGGER.warning(
                 prefix_log_message(
                     "Sender data directory not configured. "
-                    "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/incoming/)",
+                    "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/outgoing/)",
                     agent_mode=config.agent_mode,
                     transfer_session_id=config.transfer_session_id,
                 )
@@ -740,15 +740,12 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                     config.transfer_session_id,
                     artifact_path.name,
                 )
-                try:
-                    _retry_operation(
-                        "stage_upload",
-                        lambda: staging_client.upload_file(
-                            artifact_path, config.sender_staging_bucket, staging_key
-                        ),
-                    )
-                except Exception:
-                    raise
+                _retry_operation(
+                    "stage_upload",
+                    lambda artifact_path=artifact_path, staging_key=staging_key: staging_client.upload_file(
+                        artifact_path, config.sender_staging_bucket, staging_key
+                    ),
+                )
 
                 total_staged_bytes += artifact_path.stat().st_size
                 staged_artifacts.append((artifact_path, staging_key))
@@ -790,7 +787,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 try:
                     upload_metadata = _retry_operation(
                         "sftp_upload",
-                        lambda: sftp_client.upload_file(artifact_path, remote_path),
+                        lambda artifact_path=artifact_path, remote_path=remote_path: sftp_client.upload_file(artifact_path, remote_path),
                     )
                 except Exception as e:
                     log_sftp_transfer_complete(
@@ -852,7 +849,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 extra={
                     "event": "sender_file_marked",
                     "file_name": file_name,
-                    "marker_location": f"{config.sender_data_directory}../processed/{file_name}.done",
+                    "marker_location": f"{config.sender_data_directory}../processed/{file_name}{DONE_MARKER_SUFFIX}",
                 },
             )
 
@@ -939,54 +936,62 @@ def _process_single_receiver_transfer(
         0 on success, 1 on failure.
     """
     try:
-        archive_bytes, manifest_dict = _retry_operation(
-            "landing_fetch",
-            lambda: landing_zone.fetch_from_landing_bucket(
-                transfer_session_id=transfer_session_id,
-                sender_agency=sender_agency,
-                receiver_agency=config.receiver_agency,
-            ),
-        )
-
-        manifest = _retry_operation(
-            "manifest_validate",
-            lambda: landing_zone.validate_manifest(
-                manifest_dict=manifest_dict,
-                archive_bytes=archive_bytes,
-                transfer_session_id=transfer_session_id,
-                sender_agency=sender_agency,
-                receiver_agency=config.receiver_agency,
-            ),
-        )
-
-        # Guardrail: manifest identity must match what we discovered from S3.
-        if manifest.transfer_session_id != transfer_session_id:
-            raise StorageError(
-                "Manifest transfer_session_id mismatch: "
-                f"expected {transfer_session_id}, got {manifest.transfer_session_id}"
-            )
-        if manifest.receiver_agency and manifest.receiver_agency != config.receiver_agency:
-            raise StorageError(
-                "Manifest receiver_agency mismatch: "
-                f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
-            )
-
         with tempfile.TemporaryDirectory(prefix="redwood-receiver-") as tmpdir:
-            extraction_metadata = _retry_operation(
-                "decompress",
-                lambda: landing_zone.decompress_archive(
-                    archive_bytes=archive_bytes,
-                    target_directory=Path(tmpdir),
+            work_dir = Path(tmpdir)
+            archive_payload, manifest_dict = _retry_operation(
+                "landing_fetch",
+                lambda: landing_zone.fetch_from_landing_bucket(
                     transfer_session_id=transfer_session_id,
                     sender_agency=sender_agency,
                     receiver_agency=config.receiver_agency,
+                    target_directory=work_dir,
+                ),
+            )
+
+            archive_path = archive_payload if isinstance(archive_payload, Path) else None
+            archive_bytes = archive_payload if isinstance(archive_payload, bytes) else None
+
+            manifest = _retry_operation(
+                "manifest_validate",
+                lambda: landing_zone.validate_manifest(
+                    manifest_dict=manifest_dict,
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    archive_bytes=archive_bytes,
+                    archive_path=archive_path,
+                ),
+            )
+
+            # Guardrail: manifest identity must match what we discovered from S3.
+            if manifest.transfer_session_id != transfer_session_id:
+                raise StorageError(
+                    "Manifest transfer_session_id mismatch: "
+                    f"expected {transfer_session_id}, got {manifest.transfer_session_id}"
+                )
+            if manifest.receiver_agency and manifest.receiver_agency != config.receiver_agency:
+                raise StorageError(
+                    "Manifest receiver_agency mismatch: "
+                    f"expected {config.receiver_agency}, got {manifest.receiver_agency}"
+                )
+
+            extract_dir = work_dir / "extracted"
+            _retry_operation(
+                "decompress",
+                lambda: landing_zone.decompress_archive(
+                    target_directory=extract_dir,
+                    transfer_session_id=transfer_session_id,
+                    sender_agency=sender_agency,
+                    receiver_agency=config.receiver_agency,
+                    archive_bytes=archive_bytes,
+                    archive_path=archive_path,
                 ),
             )
 
             _retry_operation(
                 "store_to_target",
                 lambda: target_store.store_to_target(
-                    extracted_files_dir=Path(tmpdir),
+                    extracted_files_dir=extract_dir,
                     transfer_session_id=transfer_session_id,
                     sender_agency=sender_agency,
                     receiver_agency=config.receiver_agency,
@@ -1010,6 +1015,55 @@ def _process_single_receiver_transfer(
             },
         )
         return 1
+
+
+def _process_discovered_receiver_transfer(
+    landing_zone: "ReceiverLandingZone",
+    target_store: "ReceiverTargetStore",
+    config: AgentConfig,
+    sender_agency: str,
+    transfer_session_id: str,
+) -> tuple[str, dict[str, str]]:
+    """Process one discovered transfer and return its status with transfer metadata."""
+    transfer_ref = {
+        "sender_agency": sender_agency,
+        "transfer_session_id": transfer_session_id,
+    }
+
+    with logging_context(transfer_session_id):
+        # Pre-check target idempotency marker so already-complete transfers
+        # are not fetched/validated/decompressed again.
+        if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
+            LOGGER.debug(
+                prefix_log_message(
+                    f"Transfer from {sender_agency} already marked done in target; skipping.",
+                    agent_mode=config.agent_mode,
+                ),
+                extra={
+                    "event": "receiver_transfer_skip_done",
+                    "sender_agency": sender_agency,
+                    "transfer_session_id": transfer_session_id,
+                },
+            )
+            return "already_processed", transfer_ref
+
+        LOGGER.info(
+            prefix_log_message(
+                f"Processing transfer from {sender_agency}",
+                agent_mode=config.agent_mode,
+            ),
+            extra={
+                "event": "receiver_transfer_start",
+                "sender_agency": sender_agency,
+                "transfer_session_id": transfer_session_id,
+            },
+        )
+        result = _process_single_receiver_transfer(
+            landing_zone, target_store, config, sender_agency, transfer_session_id
+        )
+        if result == 0:
+            return "processed", transfer_ref
+        return "failed", transfer_ref
 
 
 def _create_receiver_workflow(config: AgentConfig) -> int:
@@ -1073,72 +1127,39 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
             extra={"event": "receiver_senders_found", "sender_agencies": sender_agencies},
         )
 
-        processed = 0
-        already_processed = 0
-        failed = 0
-        processed_transfers: list[dict[str, str]] = []
-        already_processed_transfers: list[dict[str, str]] = []
-        failed_transfers: list[dict[str, str]] = []
+        status_counts: dict[str, int] = {
+            "processed": 0,
+            "already_processed": 0,
+            "failed": 0,
+        }
+        transfer_details: dict[str, list[dict[str, str]]] = {
+            "processed": [],
+            "already_processed": [],
+            "failed": [],
+        }
+
         for sender_agency in sender_agencies:
             transfer_sessions = _retry_operation(
                 f"list_pending_transfers_{sender_agency}",
                 lambda sa=sender_agency: landing_zone.list_pending_transfers(sa),
             )
             for transfer_session_id in transfer_sessions:
-                with logging_context(transfer_session_id):
-                    # Pre-check target idempotency marker so already-complete transfers
-                    # are not fetched/validated/decompressed again.
-                    if target_store.is_transfer_already_stored(transfer_session_id, sender_agency):
-                        already_processed += 1
-                        already_processed_transfers.append(
-                            {
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            }
-                        )
-                        LOGGER.debug(
-                            prefix_log_message(
-                                f"Transfer from {sender_agency} already marked done in target; skipping.",
-                                agent_mode=config.agent_mode,
-                            ),
-                            extra={
-                                "event": "receiver_transfer_skip_done",
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            },
-                        )
-                        continue
+                status, transfer_ref = _process_discovered_receiver_transfer(
+                    landing_zone=landing_zone,
+                    target_store=target_store,
+                    config=config,
+                    sender_agency=sender_agency,
+                    transfer_session_id=transfer_session_id,
+                )
+                status_counts[status] += 1
+                transfer_details[status].append(transfer_ref)
 
-                    LOGGER.info(
-                        prefix_log_message(
-                            f"Processing transfer from {sender_agency}",
-                            agent_mode=config.agent_mode,
-                        ),
-                        extra={
-                            "event": "receiver_transfer_start",
-                            "sender_agency": sender_agency,
-                            "transfer_session_id": transfer_session_id,
-                        },
-                    )
-                    result = _process_single_receiver_transfer(
-                        landing_zone, target_store, config, sender_agency, transfer_session_id
-                    )
-                    if result == 0:
-                        processed += 1
-                        processed_transfers.append(
-                            {
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            }
-                        )
-                    else:
-                        failed += 1
-                        failed_transfers.append(
-                            {
-                                "sender_agency": sender_agency,
-                                "transfer_session_id": transfer_session_id,
-                            }
-                        )
+        processed = status_counts["processed"]
+        already_processed = status_counts["already_processed"]
+        failed = status_counts["failed"]
+        processed_transfers = transfer_details["processed"]
+        already_processed_transfers = transfer_details["already_processed"]
+        failed_transfers = transfer_details["failed"]
 
         recent_already_processed: list[dict[str, str]] = []
 

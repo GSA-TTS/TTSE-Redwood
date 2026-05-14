@@ -122,7 +122,7 @@ class TestSenderWorkflow:
 
     def test_sender_workflow_success(self, tmp_path: Path) -> None:
         """Sender workflow completes successfully."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
         
         # Create a temp file for mocking the download
         test_file = tmp_path / "records.json"
@@ -140,7 +140,7 @@ class TestSenderWorkflow:
                         shutil.copy2(test_file, dest)
                     
                     mock_client.download_file.side_effect = mock_download
-                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
                     
                     exit_code = _create_sender_workflow(config)
                     assert exit_code == 0
@@ -155,7 +155,7 @@ class TestSenderWorkflow:
 
     def test_sender_workflow_with_mock_policy(self, tmp_path: Path) -> None:
         """Sender workflow works with mocked policy approver."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
         
         # Create a temp file for mocking the download
         test_file = tmp_path / "records.json"
@@ -173,7 +173,7 @@ class TestSenderWorkflow:
                             shutil.copy2(test_file, dest)
                         
                         mock_client.download_file.side_effect = mock_download
-                        mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                        mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
                         
                         mock_approver = MagicMock()
                         mock_approver.approve_transfer.return_value = True
@@ -185,7 +185,7 @@ class TestSenderWorkflow:
 
     def test_sender_workflow_uses_sender_provided_data_file(self, tmp_path: Path) -> None:
         """Sender workflow stages a sender-provided source file when configured."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
         
         # Create a temp file for mocking the download
         test_file = tmp_path / "records.json"
@@ -202,19 +202,19 @@ class TestSenderWorkflow:
                         shutil.copy2(test_file, dest)
                     
                     mock_client.download_file.side_effect = mock_download
-                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
                     
                     exit_code = _create_sender_workflow(config)
                     assert exit_code == 0
 
     def test_sender_workflow_policy_denied(self) -> None:
         """Sender workflow exits with error when policy denies transfer."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
 
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._mark_file_processed"):
                 with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_class:
-                    mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                    mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
                     mock_approver = MagicMock()
                     mock_approver.approve_transfer.return_value = False
                     mock_approver_class.return_value = mock_approver
@@ -224,30 +224,30 @@ class TestSenderWorkflow:
 
     def test_sender_workflow_handles_exception(self) -> None:
         """Sender workflow handles exceptions gracefully and returns error code."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
 
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._download_from_s3") as mock_download:
-                mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
                 mock_download.side_effect = RuntimeError("Download failed")
                 exit_code = _create_sender_workflow(config)
                 assert exit_code == 1
 
     def test_sender_workflow_logs_events(self) -> None:
         """Sender workflow logs audit events."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
 
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._mark_file_processed"):
                 with patch("redwood_dataagent.agent.log_pipeline_start") as mock_start:
                     with patch("redwood_dataagent.agent.log_pipeline_complete"):
-                        mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                        mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
                         _create_sender_workflow(config)
                         mock_start.assert_called_once()
 
     def test_sender_workflow_no_files_found(self) -> None:
         """Sender workflow returns success when no new files are found."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
 
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             mock_scan.return_value = []  # No new files to process
@@ -256,7 +256,7 @@ class TestSenderWorkflow:
 
     def test_sender_workflow_no_files_does_not_emit_extract_data(self) -> None:
         """Sender workflow should not emit extract_data when nothing is processed."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
 
         with patch("redwood_dataagent.agent._scan_sender_directory", return_value=[]):
             with patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
@@ -266,7 +266,7 @@ class TestSenderWorkflow:
 
     def test_sender_workflow_emits_step_audit_events_on_success(self, tmp_path: Path) -> None:
         """Sender workflow emits detect, compress, manifest and stage-upload audit events."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
         test_file = tmp_path / "records.json"
         test_file.write_text('[{"id": 1}]')
 
@@ -288,7 +288,7 @@ class TestSenderWorkflow:
 
                                         mock_client.download_file.side_effect = mock_download
                                         mock_scan.return_value = [
-                                            ("s3://bucket/incoming/records.json", "records.json")
+                                            ("s3://bucket/outgoing/records.json", "records.json")
                                         ]
 
                                         exit_code = _create_sender_workflow(config)
@@ -301,7 +301,7 @@ class TestSenderWorkflow:
 
     def test_sender_workflow_upload_failure_logs_failure_and_returns_error(self, tmp_path: Path) -> None:
         """Sender workflow exits non-zero when staging upload fails before SFTP transfer."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
         test_file = tmp_path / "records.json"
         test_file.write_text('[{"id": 1}]')
 
@@ -320,7 +320,7 @@ class TestSenderWorkflow:
                         mock_client.download_file.side_effect = mock_download
                         mock_client.upload_file.side_effect = StorageError("staging upload failed")
                         mock_scan.return_value = [
-                            ("s3://bucket/incoming/records.json", "records.json")
+                            ("s3://bucket/outgoing/records.json", "records.json")
                         ]
 
                         exit_code = _create_sender_workflow(config)
@@ -335,7 +335,7 @@ class TestSenderWorkflow:
         _mock_sftp_client_factory,
     ) -> None:
         """Sender workflow records SFTP failure and exits non-zero."""
-        config = self._make_config(sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
         test_file = tmp_path / "records.json"
         test_file.write_text('[{"id": 1}]')
         _mock_factory, mock_sftp_client = _mock_sftp_client_factory
@@ -355,7 +355,7 @@ class TestSenderWorkflow:
 
                         mock_client.download_file.side_effect = mock_download
                         mock_scan.return_value = [
-                            ("s3://bucket/incoming/records.json", "records.json")
+                            ("s3://bucket/outgoing/records.json", "records.json")
                         ]
 
                         exit_code = _create_sender_workflow(config)
@@ -769,7 +769,7 @@ class TestRunAgent:
         """Verify sender mode agent completes with exit code 0."""
         source_file = tmp_path / "records.json"
         source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        config = self._make_config(mode="sender", sender_data_directory="s3://bucket/incoming/")
+        config = self._make_config(mode="sender", sender_data_directory="s3://bucket/outgoing/")
         
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._download_from_s3") as mock_download:
@@ -783,7 +783,7 @@ class TestRunAgent:
                             shutil.copy2(source_file, dest)
                         
                         mock_client.download_file.side_effect = mock_s3_download
-                        mock_scan.return_value = [("s3://bucket/incoming/records.json", "records.json")]
+                        mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
                         
                         mock_sftp_client = MagicMock()
                         mock_sftp_factory.return_value = mock_sftp_client

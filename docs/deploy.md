@@ -4,7 +4,7 @@ This guide is for third-party agencies deploying the Redwood Data Agent containe
 
 The same image supports two roles:
 
-- Sender: reads incoming files from object storage, prepares transfer artifacts, and runs sender workflow.
+- Sender: reads outgoing files from object storage, prepares transfer artifacts, and runs sender workflow.
 - Receiver: reads transfer artifacts from landing storage, validates/decompresses, and stores to target storage.
 
 ## 1. Deployment Model
@@ -66,9 +66,7 @@ Bucket names are derived by code using:
 
 Key path conventions used by workflows:
 
-TODO: Revisit sender prefix naming (`incoming/` vs `outgoing/`) for agency-facing clarity.
-
-- Sender scan prefix: `incoming/` in the sender staging bucket (`tts-core-{environment}-{agency}-data-staging`). Agencies should place files they want to share in this prefix. The name is from the application perspective, not business direction.
+- Sender scan prefix: `outgoing/` in the sender staging bucket (`tts-core-{environment}-{agency}-data-staging`). Agencies should place files they want to share in this prefix for sender processing.
 - Sender transfer artifacts: `transfers/{transfer_session_id}/...` in the sender staging bucket (`tts-core-{environment}-{agency}-data-staging`). The adapter writes generated transfer artifacts to this prefix.
 - Receiver marker/idempotency objects under transfer prefixes
 
@@ -80,7 +78,7 @@ Grant the workload identity least-privilege access to only required buckets/pref
 
 Sender typically needs:
 
-- Read/list from sender incoming/staging prefixes.
+- Read/list from sender outgoing/staging prefixes.
 - Write for generated artifacts and sender marker objects.
 
 Receiver typically needs:
@@ -225,7 +223,7 @@ Starting Redwood Data Agent...
 
 Sender checks:
 
-- Agent can list and read objects under the sender staging bucket `incoming/` prefix.
+- Agent can list and read objects under the sender staging bucket `outgoing/` prefix.
 - Transfer artifacts are written to expected `transfers/{session}/` path.
 
 Example sender logs to look for:

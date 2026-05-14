@@ -80,7 +80,7 @@ def create_sftp_client_from_secrets_manager(
     ...     secrets_manager_name=config.sftp_secrets_manager_name,
     ...     aws_region=config.aws_region
     ... )
-    >>> client.upload_file(Path("myfile.tar.gz"), "/incoming/myfile.tar.gz")
+    >>> client.upload_file(Path("myfile.tar.gz"), "/outgoing/myfile.tar.gz")
     """
     # Step 1: Connect to Secrets Manager and get credentials
     secrets_client = SecretsManagerClient(aws_region=aws_region)

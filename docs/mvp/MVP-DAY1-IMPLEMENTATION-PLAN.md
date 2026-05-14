@@ -5,7 +5,7 @@
 ### Primary Objectives
 1. **End-to-End Data Transfer**: Implement a complete flow from Sender Agency (DOT) object storage (S3, Azure Blob, or equivalent) to SFTP to Receiver Agency (GSA)
 2. **Parameterized Agencies**: Support dynamic sender and receiver agencies rather than hard-coding DOT and GSA
-3. **In-Container Polling (Day 1)**: Sender Agent polls the incoming S3 prefix every 5 minutes for new files; receiver polling follows the same pattern. S3 Events (via SQS/Lambda) are deferred to a future phase to reduce Day 1 resource and permissions complexity.
+3. **In-Container Polling (Day 1)**: Sender Agent polls the outgoing S3 prefix every 5 minutes for new files; receiver polling follows the same pattern. S3 Events (via SQS/Lambda) are deferred to a future phase to reduce Day 1 resource and permissions complexity.
 4. **Security First**: Encryption at rest in S3 and encryption in transit over SSH/SFTP
 5. **Operational Visibility**: Structured logging and audit trail
 
@@ -109,7 +109,7 @@
 
 **Key Difference from ADR 003:** The Day 1 MVP does not use bidirectional requests.
 
-1. **Sender Agent Polls Incoming Prefix**: The Sender Agent container scans the configured incoming S3 prefix (e.g. `s3://bucket/incoming/`) on a 5-minute interval. Files with an existing `.done` marker in `processed/` are skipped.
+1. **Sender Agent Polls Outgoing Prefix**: The Sender Agent container scans the configured outgoing S3 prefix (e.g. `s3://bucket/outgoing/`) on a 5-minute interval. Files with an existing `.done` marker in `processed/` are skipped.
 2. **File Picked Up for Processing**: When an unprocessed file is found, the agent picks up the first available file and begins the sender workflow.
 3. **Sender Workflow**:
    - Read the intended sender-owned data file from sender-side object storage
@@ -254,7 +254,7 @@ ttse-redwood/
 | Core | `TRANSFER_SESSION_ID` | Correlation identifier for one transfer session |
 | Agency | `SENDER_AGENCY` | Sender agency code |
 | Agency | `RECEIVER_AGENCY` | Receiver agency code |
-| Input | `SENDER_DATA_DIRECTORY` | S3 directory path scanned for incoming files (e.g. `s3://bucket/incoming/`); required for sender-mode runs |
+| Input | `SENDER_DATA_DIRECTORY` | S3 directory path scanned for outgoing files (e.g. `s3://bucket/outgoing/`); required for sender-mode runs |
 | SFTP | `SFTP_HOST` | Receiver-side SFTP endpoint (follow-up PR scope) |
 | SFTP | `SFTP_PORT` | SSH and SFTP port (follow-up PR scope) |
 | SFTP | `SFTP_USERNAME` | Username used by the sender container (follow-up PR scope) |
@@ -409,7 +409,7 @@ Day 1 validation rule:
 1. Every operation emits a structured event.
 2. Each event includes `transfer_session_id` for correlation.
 3. Events are expected to flow through centralized logging and observability tooling.
-4. Day 1 sender events are initiated when the polling loop detects an unprocessed file in the incoming S3 prefix.
+4. Day 1 sender events are initiated when the polling loop detects an unprocessed file in the outgoing S3 prefix.
 5. Day 1 receiver events are initiated when the polling loop detects a new transfer in the GSA landing S3 prefix.
 6. Sender events cover extraction, approval, compression, manifest creation, transfer start, transfer complete, and pipeline completion.
 7. Receiver events cover validation, decompression, storage, and pipeline completion.
@@ -519,7 +519,7 @@ Test dependencies:
 
 MVP Day 1 is complete when:
 
-1. Sender Agent polls the incoming S3 prefix on a 5-minute interval and picks up unprocessed files. Processed files are tracked via `.done` markers.
+1. Sender Agent polls the outgoing S3 prefix on a 5-minute interval and picks up unprocessed files. Processed files are tracked via `.done` markers.
 2. Sender workflow completes sender file review, policy approval, canonical manifest creation, compression, and staging.
 3. SFTP transfer uploads compressed data from sender staging to GSA's SFTP endpoint.
 4. Receiver Agent polls the GSA landing S3 prefix on a 5-minute interval; on detecting a new transfer, it validates manifest metadata, decompresses the payload, and stores data to the receiver target bucket.
