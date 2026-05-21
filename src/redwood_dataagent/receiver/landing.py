@@ -29,6 +29,7 @@ from redwood_dataagent.aws.s3 import S3Client
 _logger = logging.getLogger(__name__)
 
 _STREAM_CHUNK_SIZE = 8 * 1024 * 1024
+_ARCHIVE_FILENAME = "transfer.tar.gz"
 
 
 class ReceiverLandingZone:
@@ -156,7 +157,7 @@ class ReceiverLandingZone:
             )
             archive_key = ReceiverStoragePath.landing(
                 transfer_session_id,
-                "transfer.tar.gz",
+                _ARCHIVE_FILENAME,
                 sender_agency,
             )
 
@@ -166,11 +167,13 @@ class ReceiverLandingZone:
 
             if target_directory is not None:
                 target_directory.mkdir(parents=True, exist_ok=True)
-                archive_path = target_directory / "transfer.tar.gz"
-                archive_size = self._download_to_file(archive_key, "transfer.tar.gz", archive_path)
+                archive_path = target_directory / _ARCHIVE_FILENAME
+                archive_size = self._download_to_file(
+                    archive_key, _ARCHIVE_FILENAME, archive_path
+                )
                 archive_payload: Path | bytes = archive_path
             else:
-                archive_bytes = self._download_from_s3(archive_key, "transfer.tar.gz")
+                archive_bytes = self._download_from_s3(archive_key, _ARCHIVE_FILENAME)
                 archive_size = len(archive_bytes)
                 archive_payload = archive_bytes
 

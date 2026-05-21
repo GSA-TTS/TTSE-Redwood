@@ -18,6 +18,7 @@ DEFAULT_POLICY_HEALTHCHECK_URL = (
     "https://everglades.dev.tts.mcaas.fcs.gsa.gov/health"
 )
 DEFAULT_POLICY_HEALTHCHECK_TIMEOUT_SECONDS = 5
+POLICY_HEALTH_PROBE_FAILED_MESSAGE = "Policy server health probe failed"
 
 
 class PolicyApprover:
@@ -121,7 +122,7 @@ class PolicyApprover:
         except HTTPError as exc:
             body = exc.read(4096).decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
             logger.warning(
-                prefix_log_message("Policy server health probe failed"),
+                prefix_log_message(POLICY_HEALTH_PROBE_FAILED_MESSAGE),
                 extra={
                     "event": "policy_server_health_probe_failure",
                     "healthcheck_url": healthcheck_url,
@@ -133,7 +134,7 @@ class PolicyApprover:
             )
         except URLError as exc:
             logger.warning(
-                prefix_log_message("Policy server health probe failed"),
+                prefix_log_message(POLICY_HEALTH_PROBE_FAILED_MESSAGE),
                 extra={
                     "event": "policy_server_health_probe_failure",
                     "healthcheck_url": healthcheck_url,
@@ -143,7 +144,7 @@ class PolicyApprover:
             )
         except Exception as exc:
             logger.warning(
-                prefix_log_message("Policy server health probe failed"),
+                prefix_log_message(POLICY_HEALTH_PROBE_FAILED_MESSAGE),
                 extra={
                     "event": "policy_server_health_probe_failure",
                     "healthcheck_url": healthcheck_url,
