@@ -413,56 +413,18 @@ class SFTPClient:
         while attempt <= self._max_retries:
             attempt += 1
             try:
-                sftp = self._connect()
-                connected_host = self._connected_host or self._hosts[0]
-
-                # Stream upload in configurable chunks so large files do not
-                # buffer fully in memory and per-chunk timeouts are enforced.
-                with open(source_path, "rb") as local_fh:
-                    with sftp.open(remote_path, "wb") as remote_fh:
-                        remote_fh.set_pipelined(True)
-                        while True:
-                            chunk = local_fh.read(self._chunk_size)
-                            if not chunk:
-                                break
-                            remote_fh.write(chunk)
-
-                sftp.close()
-
-                LOGGER.debug(
-                    "Uploaded file to SFTP",
-                    extra={
-                        "event": "sftp_upload",
-                        "endpoint": connected_host,
-                        "remote_path": remote_path,
-                        "source_path": str(source_path),
-                        "file_size_bytes": file_size,
-                        "chunk_size_bytes": self._chunk_size,
-                        "attempts": attempt,
-                    },
+                connected_host = self._upload_once(source_path, remote_path)
+                return self._build_upload_metadata(
+                    source_path=source_path,
+                    remote_path=remote_path,
+                    file_size=file_size,
+                    attempt=attempt,
+                    connected_host=connected_host,
                 )
-                return {
-                    "source_path": str(source_path),
-                    "remote_path": remote_path,
-                    "file_size_bytes": file_size,
-                    "attempts": attempt,
-                    "endpoint": connected_host,
-                }
             except self._paramiko.SSHException as e:
                 if attempt <= self._max_retries:
-                    backoff = self._retry_backoff ** (attempt - 1)
-                    backoff = min(backoff, 60)  # Cap at 60 seconds
-                    LOGGER.warning(
-                        f"SFTP upload failed, retrying in {backoff}s",
-                        extra={
-                            "event": "sftp_retry",
-                            "remote_path": remote_path,
-                            "attempt": attempt,
-                            "max_retries": self._max_retries,
-                            "reason": str(e),
-                        },
-                    )
-                    sleep(backoff)
+                    self._retry_upload_with_backoff(remote_path, attempt, e)
+                    continue
                 else:
                     raise SFTPError(
                         f"Failed to upload {source_path} to sftp://{connected_host or '(all endpoints)'}{remote_path} "
@@ -476,6 +438,96 @@ class SFTPClient:
                 raise SFTPError(
                     f"Failed to upload file to sftp://{connected_host or '(all endpoints)'}{remote_path}: {e}"
                 ) from e
+
+    def _upload_once(self, source_path: Path, remote_path: str) -> str:
+        """Upload once using an established SFTP connection and return host used."""
+        sftp = self._connect()
+        connected_host = self._connected_host or self._hosts[0]
+
+        try:
+            self._stream_file_chunks(sftp, source_path, remote_path)
+        finally:
+            self._close_sftp_client(sftp)
+
+        return connected_host
+
+    def _stream_file_chunks(
+        self,
+        sftp: object,
+        source_path: Path,
+        remote_path: str,
+    ) -> None:
+        """Stream local file bytes to remote path in configured chunk sizes."""
+        # Stream upload in configurable chunks so large files do not buffer
+        # fully in memory and per-chunk timeouts are enforced.
+        with open(source_path, "rb") as local_fh:
+            with sftp.open(remote_path, "wb") as remote_fh:
+                remote_fh.set_pipelined(True)
+                while True:
+                    chunk = local_fh.read(self._chunk_size)
+                    if not chunk:
+                        break
+                    remote_fh.write(chunk)
+
+    def _close_sftp_client(self, sftp: object) -> None:
+        """Close SFTP client best-effort without masking upload errors."""
+        try:
+            sftp.close()
+        except Exception:
+            LOGGER.debug(
+                "Failed to close SFTP client after upload attempt",
+                extra={"event": "sftp_close_failed"},
+            )
+
+    def _retry_upload_with_backoff(
+        self,
+        remote_path: str,
+        attempt: int,
+        error: Exception,
+    ) -> None:
+        """Log and sleep using bounded exponential backoff for retryable errors."""
+        backoff = self._retry_backoff ** (attempt - 1)
+        backoff = min(backoff, 60)  # Cap at 60 seconds
+        LOGGER.warning(
+            f"SFTP upload failed, retrying in {backoff}s",
+            extra={
+                "event": "sftp_retry",
+                "remote_path": remote_path,
+                "attempt": attempt,
+                "max_retries": self._max_retries,
+                "reason": str(error),
+            },
+        )
+        sleep(backoff)
+
+    def _build_upload_metadata(
+        self,
+        source_path: Path,
+        remote_path: str,
+        file_size: int,
+        attempt: int,
+        connected_host: str,
+    ) -> dict:
+        """Build and log successful upload metadata payload."""
+        LOGGER.debug(
+            "Uploaded file to SFTP",
+            extra={
+                "event": "sftp_upload",
+                "endpoint": connected_host,
+                "remote_path": remote_path,
+                "source_path": str(source_path),
+                "file_size_bytes": file_size,
+                "chunk_size_bytes": self._chunk_size,
+                "attempts": attempt,
+            },
+        )
+        return {
+            "source_path": str(source_path),
+            "remote_path": remote_path,
+            "file_size_bytes": file_size,
+            "attempts": attempt,
+            "endpoint": connected_host,
+        }
 
     def _validate_upload_source(self, source_path: Path) -> None:
         """Validate upload source path points to an existing file."""
