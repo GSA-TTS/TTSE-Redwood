@@ -29,6 +29,7 @@ from redwood_dataagent.aws.s3 import S3Client
 _logger = logging.getLogger(__name__)
 
 _STREAM_CHUNK_SIZE = 8 * 1024 * 1024
+_ARCHIVE_FILENAME = "transfer.tar.gz"
 
 
 class ReceiverLandingZone:
@@ -156,7 +157,7 @@ class ReceiverLandingZone:
             )
             archive_key = ReceiverStoragePath.landing(
                 transfer_session_id,
-                "transfer.tar.gz",
+                _ARCHIVE_FILENAME,
                 sender_agency,
             )
 
@@ -166,11 +167,13 @@ class ReceiverLandingZone:
 
             if target_directory is not None:
                 target_directory.mkdir(parents=True, exist_ok=True)
-                archive_path = target_directory / "transfer.tar.gz"
-                archive_size = self._download_to_file(archive_key, "transfer.tar.gz", archive_path)
+                archive_path = target_directory / _ARCHIVE_FILENAME
+                archive_size = self._download_to_file(
+                    archive_key, _ARCHIVE_FILENAME, archive_path
+                )
                 archive_payload: Path | bytes = archive_path
             else:
-                archive_bytes = self._download_from_s3(archive_key, "transfer.tar.gz")
+                archive_bytes = self._download_from_s3(archive_key, _ARCHIVE_FILENAME)
                 archive_size = len(archive_bytes)
                 archive_payload = archive_bytes
 
@@ -337,50 +340,20 @@ class ReceiverLandingZone:
             StorageError: If decompression fails or archive is invalid
         """
         try:
-            if target_directory is None:
-                # Create secure temp directory with restricted permissions (0o700)
-                temp_dir = tempfile.mkdtemp(prefix="redwood-receiver-extract-")
-                target_directory = Path(temp_dir)
-            else:
-                target_directory.mkdir(parents=True, exist_ok=True)
-
-            if archive_path is None and archive_bytes is None:
-                raise StorageError("Either archive_path or archive_bytes must be provided")
-
-            # Extract tar.gz
-            extracted_files = []
-            total_bytes = 0
-
-            if archive_path is not None:
-                tar_context = tarfile.open(name=str(archive_path), mode="r:gz")  # NOSONAR
-            else:
-                tar_context = tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz")  # NOSONAR
+            extract_dir = self._prepare_extract_directory(target_directory)
+            tar_context = self._open_archive(archive_path=archive_path, archive_bytes=archive_bytes)
 
             with tar_context as tar:
-                for member in tar.getmembers():
-                    if member.isfile():
-                        extracted_path = target_directory / member.name
-                        
-                        # Prevent path traversal: ensure extracted file stays within target_directory
-                        try:
-                            extracted_path.resolve().relative_to(target_directory.resolve())
-                        except ValueError:
-                            raise StorageError(f"Archive contains path traversal: {member.name}")
-                        
-                        extracted_path.parent.mkdir(parents=True, exist_ok=True)
-                        tar.extractall(
-                            path=target_directory,
-                            members=[member],
-                            filter="data"  # Security: only extract regular files, skip symbolic links
-                        )
-                        extracted_files.append(member.name)
-                        total_bytes += member.size
+                extracted_files, total_bytes = self._extract_archive_members(
+                    tar=tar,
+                    target_directory=extract_dir,
+                )
 
             extraction_metadata = {
                 "file_count": len(extracted_files),
                 "total_bytes": total_bytes,
                 "extracted_files": extracted_files,
-                "target_directory": str(target_directory),
+                "target_directory": str(extract_dir),
             }
 
             # Log successful decompression
@@ -418,6 +391,59 @@ class ReceiverLandingZone:
                 )
 
             raise StorageError(error_msg) from e
+
+    def _prepare_extract_directory(self, target_directory: Optional[Path]) -> Path:
+        """Prepare and return extraction target directory."""
+        if target_directory is None:
+            # Create secure temp directory with restricted permissions (0o700)
+            temp_dir = tempfile.mkdtemp(prefix="redwood-receiver-extract-")
+            return Path(temp_dir)
+
+        target_directory.mkdir(parents=True, exist_ok=True)
+        return target_directory
+
+    def _open_archive(
+        self,
+        archive_path: Optional[Path],
+        archive_bytes: Optional[bytes],
+    ) -> tarfile.TarFile:
+        """Open tar.gz archive from path or bytes."""
+        if archive_path is not None:
+            return tarfile.open(name=str(archive_path), mode="r:gz")  # NOSONAR
+        if archive_bytes is None:
+            raise StorageError("Either archive_path or archive_bytes must be provided")
+        return tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz")  # NOSONAR
+
+    def _extract_archive_members(
+        self,
+        tar: tarfile.TarFile,
+        target_directory: Path,
+    ) -> tuple[list[str], int]:
+        """Extract regular files from archive and return extracted names and byte count."""
+        extracted_files: list[str] = []
+        total_bytes = 0
+        target_root = target_directory.resolve()
+
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+
+            self._validate_archive_member_path(member.name, target_root)
+            extracted_path = target_directory / member.name
+            extracted_path.parent.mkdir(parents=True, exist_ok=True)
+            tar.extract(member, path=target_directory)
+            extracted_files.append(member.name)
+            total_bytes += member.size
+
+        return extracted_files, total_bytes
+
+    def _validate_archive_member_path(self, member_name: str, target_root: Path) -> None:
+        """Validate archive member path does not escape target directory."""
+        extracted_path = (target_root / member_name).resolve()
+        try:
+            extracted_path.relative_to(target_root)
+        except ValueError as exc:
+            raise StorageError(f"Archive contains path traversal: {member_name}") from exc
 
     def _download_from_s3(self, s3_key: str, file_type: str) -> bytes:
         """Helper to download file from S3 landing bucket.

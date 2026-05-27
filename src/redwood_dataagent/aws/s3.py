@@ -80,8 +80,10 @@ class S3Client:
             except Exception:
                 # Test environments may mock boto3 without package submodules.
                 class TransferConfig:  # type: ignore[no-redef]
-                    def __init__(self, **_: object):
-                        pass
+                    def __init__(self, **kwargs: object):
+                        # Keep fallback compatible with boto3's TransferConfig by
+                        # accepting arbitrary keyword arguments used by this client.
+                        self.options = kwargs
 
             multipart_threshold_mb = _get_positive_int_env("S3_MULTIPART_THRESHOLD_MB", 64)
             multipart_chunksize_mb = _get_positive_int_env("S3_MULTIPART_CHUNKSIZE_MB", 64)

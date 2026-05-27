@@ -232,74 +232,12 @@ class SFTPClient:
         """
         last_error = None
         self._connected_host = None
-        
+
         for host in self._hosts:
             try:
-                ssh = self._paramiko.SSHClient()
-                # Accept unknown host keys so first-time connections from
-                # ephemeral pods do not fail due to missing known_hosts.
-                ssh.set_missing_host_key_policy(
-                    self._paramiko.AutoAddPolicy()
-                )
-
-                # key_path is still supported for backward compatibility and
-                # local/container runs where SSH keys are mounted as files.
-                # Determine auth method: key_path > key_content > password
-                if self._key_path:
-                    ssh.connect(
-                        host,
-                        port=self._port,
-                        username=self._username,
-                        key_filename=str(self._key_path),
-                        timeout=self._timeout,
-                    )
-                elif self._key_content:
-                    # Load key from content (e.g., from Secrets Manager)
-                    private_key = self._load_private_key_from_content(
-                        self._key_content
-                    )
-
-                    ssh.connect(
-                        host,
-                        port=self._port,
-                        username=self._username,
-                        pkey=private_key,
-                        timeout=self._timeout,
-                    )
-                else:
-                    # Fall back to password
-                    ssh.connect(
-                        host,
-                        port=self._port,
-                        username=self._username,
-                        password=self._password,
-                        timeout=self._timeout,
-                    )
-
-                # Apply socket-level timeout so large-file stalls
-                # are detected and trigger a retry instead of hanging.
-                transport = ssh.get_transport()
-                if transport is not None:
-                    transport.set_keepalive(30)  # send keepalive every 30s
-                    sock = transport.sock
-                    if sock is not None:
-                        try:
-                            sock.settimeout(self._timeout)
-                        except OSError:
-                            pass  # best-effort; may not apply on all platforms
-
-                sftp = ssh.open_sftp()
-                LOGGER.debug(
-                    "Successfully connected to SFTP endpoint",
-                    extra={
-                        "event": "sftp_connect",
-                        "host": host,
-                        "port": self._port,
-                    },
-                )
+                sftp = self._connect_to_host(host)
                 self._connected_host = host
                 return sftp
-                
             except self._paramiko.AuthenticationException as e:
                 LOGGER.warning(
                     "SFTP authentication failed",
@@ -317,50 +255,119 @@ class SFTPClient:
                 last_error = SFTPError(
                     f"SSH connection failed to {host}:{self._port}: {e}"
                 )
-                LOGGER.warning(
+                self._log_connection_warning(
                     "SSH connection failed, trying next endpoint",
-                    extra={
-                        "event": "sftp_connect_failed",
-                        "host": host,
-                        "error": str(e),
-                    },
+                    host,
+                    "sftp_connect_failed",
+                    e,
                 )
             except OSError as e:
                 last_error = SFTPError(
                     f"Network error connecting to {host}:{self._port}: {e}"
                 )
-                LOGGER.warning(
+                self._log_connection_warning(
                     "Network error, trying next endpoint",
-                    extra={
-                        "event": "sftp_network_error",
-                        "host": host,
-                        "error": str(e),
-                    },
+                    host,
+                    "sftp_network_error",
+                    e,
                 )
             except Exception as e:
                 last_error = SFTPError(
                     f"Failed to connect to SFTP server {host}: {e}"
                 )
-                LOGGER.warning(
+                self._log_connection_warning(
                     "Unexpected error, trying next endpoint",
-                    extra={
-                        "event": "sftp_unexpected_error",
-                        "host": host,
-                        "error": str(e),
-                    },
+                    host,
+                    "sftp_unexpected_error",
+                    e,
                 )
-        
-        # All endpoints failed
+
         raise SFTPError(
             f"Failed to connect to any SFTP endpoint. "
             f"Tried {len(self._hosts)} hosts: {', '.join(self._hosts)}. "
             f"Last error: {last_error}"
         ) from last_error
 
+    def _connect_to_host(self, host: str) -> paramiko.SFTPClient:
+        ssh = self._paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(self._paramiko.AutoAddPolicy())
+
+        self._open_ssh_connection(ssh, host)
+        self._configure_transport(ssh.get_transport())
+
+        sftp = ssh.open_sftp()
+        LOGGER.debug(
+            "Successfully connected to SFTP endpoint",
+            extra={
+                "event": "sftp_connect",
+                "host": host,
+                "port": self._port,
+            },
+        )
+        return sftp
+
+    def _open_ssh_connection(self, ssh, host: str) -> None:
+        if self._key_path:
+            ssh.connect(
+                host,
+                port=self._port,
+                username=self._username,
+                key_filename=str(self._key_path),
+                timeout=self._timeout,
+            )
+        elif self._key_content:
+            private_key = self._load_private_key_from_content(self._key_content)
+            ssh.connect(
+                host,
+                port=self._port,
+                username=self._username,
+                pkey=private_key,
+                timeout=self._timeout,
+            )
+        else:
+            ssh.connect(
+                host,
+                port=self._port,
+                username=self._username,
+                password=self._password,
+                timeout=self._timeout,
+            )
+
+    def _configure_transport(
+        self, transport: Optional[paramiko.transport.Transport]
+    ) -> None:
+        if transport is None:
+            return
+
+        transport.set_keepalive(30)
+        sock = transport.sock
+        if sock is None:
+            return
+
+        try:
+            sock.settimeout(self._timeout)
+        except OSError:
+            pass  # best-effort; may not apply on all platforms
+
+    def _log_connection_warning(
+        self, message: str, host: str, event: str, error: Exception
+    ) -> None:
+        LOGGER.warning(
+            message,
+            extra={
+                "event": event,
+                "host": host,
+                "error": str(error),
+            },
+        )
+
     def upload_file(
         self, source_path: Path, remote_path: str
     ) -> dict:
         """Upload a file from container filesystem to SFTP server.
+
+        Orchestrates upload attempts, retry/backoff behavior, and final
+        metadata construction.
 
         Uploads a file with automatic retry on transient failures (timeout,
         connection reset) and failover to alternate endpoints. Performs validation
@@ -407,67 +414,18 @@ class SFTPClient:
         self._validate_upload_source(source_path)
 
         file_size = source_path.stat().st_size
-        attempt = 0
         connected_host = None
 
-        while attempt <= self._max_retries:
-            attempt += 1
+        for attempt in range(1, self._max_retries + 2):
             try:
-                sftp = self._connect()
-                connected_host = self._connected_host or self._hosts[0]
-
-                # Stream upload in configurable chunks so large files do not
-                # buffer fully in memory and per-chunk timeouts are enforced.
-                with open(source_path, "rb") as local_fh:
-                    with sftp.open(remote_path, "wb") as remote_fh:
-                        remote_fh.set_pipelined(True)
-                        while True:
-                            chunk = local_fh.read(self._chunk_size)
-                            if not chunk:
-                                break
-                            remote_fh.write(chunk)
-
-                sftp.close()
-
-                LOGGER.debug(
-                    "Uploaded file to SFTP",
-                    extra={
-                        "event": "sftp_upload",
-                        "endpoint": connected_host,
-                        "remote_path": remote_path,
-                        "source_path": str(source_path),
-                        "file_size_bytes": file_size,
-                        "chunk_size_bytes": self._chunk_size,
-                        "attempts": attempt,
-                    },
+                connected_host = self._upload_file_attempt(source_path, remote_path)
+                return self._build_upload_metadata(
+                    source_path, remote_path, file_size, attempt, connected_host
                 )
-                return {
-                    "source_path": str(source_path),
-                    "remote_path": remote_path,
-                    "file_size_bytes": file_size,
-                    "attempts": attempt,
-                    "endpoint": connected_host,
-                }
             except self._paramiko.SSHException as e:
-                if attempt <= self._max_retries:
-                    backoff = self._retry_backoff ** (attempt - 1)
-                    backoff = min(backoff, 60)  # Cap at 60 seconds
-                    LOGGER.warning(
-                        f"SFTP upload failed, retrying in {backoff}s",
-                        extra={
-                            "event": "sftp_retry",
-                            "remote_path": remote_path,
-                            "attempt": attempt,
-                            "max_retries": self._max_retries,
-                            "reason": str(e),
-                        },
-                    )
-                    sleep(backoff)
-                else:
-                    raise SFTPError(
-                        f"Failed to upload {source_path} to sftp://{connected_host or '(all endpoints)'}{remote_path} "
-                        f"after {self._max_retries} retries: {e}"
-                    ) from e
+                self._handle_upload_ssh_exception(
+                    source_path, remote_path, attempt, connected_host, e
+                )
             except OSError as e:
                 raise SFTPError(
                     f"Failed to read local file {source_path}: {e}"
@@ -476,6 +434,92 @@ class SFTPClient:
                 raise SFTPError(
                     f"Failed to upload file to sftp://{connected_host or '(all endpoints)'}{remote_path}: {e}"
                 ) from e
+
+        raise SFTPError(
+            f"Failed to upload {source_path} to sftp://{connected_host or '(all endpoints)'}{remote_path} "
+            f"after {self._max_retries} retries"
+        )
+
+    def _upload_file_attempt(self, source_path: Path, remote_path: str) -> str:
+        """Run a single upload attempt and return the endpoint used."""
+        sftp = self._connect()
+        connected_host = self._connected_host or self._hosts[0]
+        try:
+            self._stream_upload(sftp, source_path, remote_path)
+        finally:
+            sftp.close()
+        return connected_host
+
+    def _stream_upload(
+        self, sftp: paramiko.SFTPClient, source_path: Path, remote_path: str
+    ) -> None:
+        """Stream local file contents to the remote destination in chunks."""
+        with open(source_path, "rb") as local_fh:
+            with sftp.open(remote_path, "wb") as remote_fh:
+                remote_fh.set_pipelined(True)
+                while True:
+                    chunk = local_fh.read(self._chunk_size)
+                    if not chunk:
+                        break
+                    remote_fh.write(chunk)
+
+    def _build_upload_metadata(
+        self,
+        source_path: Path,
+        remote_path: str,
+        file_size: int,
+        attempt: int,
+        connected_host: str,
+    ) -> dict:
+        """Build and log upload metadata for a successful transfer."""
+        LOGGER.debug(
+            "Uploaded file to SFTP",
+            extra={
+                "event": "sftp_upload",
+                "endpoint": connected_host,
+                "remote_path": remote_path,
+                "source_path": str(source_path),
+                "file_size_bytes": file_size,
+                "chunk_size_bytes": self._chunk_size,
+                "attempts": attempt,
+            },
+        )
+        return {
+            "source_path": str(source_path),
+            "remote_path": remote_path,
+            "file_size_bytes": file_size,
+            "attempts": attempt,
+            "endpoint": connected_host,
+        }
+
+    def _handle_upload_ssh_exception(
+        self,
+        source_path: Path,
+        remote_path: str,
+        attempt: int,
+        connected_host: Optional[str],
+        error: Exception,
+    ) -> None:
+        """Retry on transient SSH errors or raise after max retries."""
+        if attempt > self._max_retries:
+            raise SFTPError(
+                f"Failed to upload {source_path} to sftp://{connected_host or '(all endpoints)'}{remote_path} "
+                f"after {self._max_retries} retries: {error}"
+            ) from error
+
+        backoff = self._retry_backoff ** (attempt - 1)
+        backoff = min(backoff, 60)  # Cap at 60 seconds
+        LOGGER.warning(
+            f"SFTP upload failed, retrying in {backoff}s",
+            extra={
+                "event": "sftp_retry",
+                "remote_path": remote_path,
+                "attempt": attempt,
+                "max_retries": self._max_retries,
+                "reason": str(error),
+            },
+        )
+        sleep(backoff)
 
     def _validate_upload_source(self, source_path: Path) -> None:
         """Validate upload source path points to an existing file."""
