@@ -26,7 +26,10 @@ FROM public.ecr.aws/docker/library/python:3.13-slim
 # unavailable in the official Debian 13 (Trixie) repositories. 
 # These will be fixed automatically once the Debian Security Team and 
 # Docker Hub release updated versions of the 'python:3.13-slim' image.
-RUN apt-get update && apt-get upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Troubleshooting support: include vi for ad-hoc pod exec debugging.
+RUN apt-get update && apt-get upgrade -y && \
+	apt-get install -y --no-install-recommends vim-tiny && \
+	apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Python runtime flags
 ENV PYTHONDONTWRITEBYTECODE=1 \
