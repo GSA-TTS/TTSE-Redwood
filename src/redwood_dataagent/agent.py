@@ -60,6 +60,7 @@ DEFAULT_ARCHIVE_FILE_NAME = "transfer.tar.gz"
 DEFAULT_MANIFEST_FILE_NAME = "manifest.json"
 DEFAULT_RETRY_ATTEMPTS = 3
 DONE_MARKER_SUFFIX = ".done"
+VALID_SENDER_INPUT_MODES = {"file", "query"}
 
 T = TypeVar("T")
 
@@ -109,6 +110,27 @@ def _extract_data(config: AgentConfig) -> None:
     Phase 2 can implement agency-side extraction logic here.
     """
     _ = config
+
+
+def _select_sender_input_mode(raw_mode: str | None) -> tuple[str, str]:
+    """Normalize sender input mode and provide a selection reason.
+
+    Returns
+    -------
+    tuple[str, str]
+        (selected_mode, reason)
+    """
+    if raw_mode is None:
+        return "file", "default_missing"
+
+    normalized_mode = raw_mode.strip().lower()
+    if not normalized_mode:
+        return "file", "default_blank"
+
+    if normalized_mode in VALID_SENDER_INPUT_MODES:
+        return normalized_mode, "explicit"
+
+    return "file", f"default_invalid:{raw_mode}"
 
 
 def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[str, str]]:
@@ -496,6 +518,21 @@ def _create_sender_workflow(config: AgentConfig) -> int:
         Exit code (0 for success, non-zero for failure).
     """
     try:
+        selected_mode, selection_reason = _select_sender_input_mode(config.sender_input_mode)
+        LOGGER.info(
+            prefix_log_message(
+                "Selected sender input mode",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_input_mode_selected",
+                "selected_mode": selected_mode,
+                "selection_source": "SENDER_INPUT_MODE",
+                "selection_reason": selection_reason,
+            },
+        )
+
         if not config.sender_data_directory:
             LOGGER.warning(
                 prefix_log_message(
