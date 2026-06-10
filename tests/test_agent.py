@@ -10,6 +10,7 @@ import pytest
 
 from redwood_dataagent.audit.events import EventOutcome
 from redwood_dataagent.agent import (
+    ALLOWLISTED_QUERY_TEMPLATES,
     _compute_checksum,
     _create_receiver_workflow,
     _create_sender_workflow,
@@ -18,6 +19,7 @@ from redwood_dataagent.agent import (
     _parse_s3_path,
     _scan_sender_directory,
     _select_sender_input_mode,
+    _validate_sender_query_input_contract,
     run_agent,
 )
 from redwood_dataagent.config import AgentConfig
@@ -112,6 +114,100 @@ class TestSenderInputModeSelection:
         assert reason.startswith("default_invalid:")
 
 
+class TestSenderQueryInputContractValidation:
+    """Tests for sender query input contract parsing and allow-list checks."""
+
+    _MAX_QUERY_ROW_LIMIT = 1_000_000
+    _MAX_QUERY_TIMEOUT_SECONDS = 600
+
+    def test_validate_query_input_contract_success(self) -> None:
+        """Allow-listed template with required params validates successfully."""
+        contract = _validate_sender_query_input_contract(
+            '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":1000,"timeout_seconds":30}',
+            self._MAX_QUERY_ROW_LIMIT,
+            self._MAX_QUERY_TIMEOUT_SECONDS,
+        )
+
+        assert contract.template_id == "dot_contract_extract_v1"
+        assert contract.params["schema"] == "dot"
+        assert contract.row_limit == 1000
+        assert contract.timeout_seconds == 30
+
+    def test_validate_query_input_contract_missing_required_param_raises(self) -> None:
+        """Missing required params for template fails fast."""
+        with pytest.raises(Exception, match="Missing required query params"):
+            _validate_sender_query_input_contract(
+                '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot"}}',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_blank_required_param_raises(self) -> None:
+        """Blank/null required params are treated as invalid for required fields."""
+        with pytest.raises(Exception, match="Missing required query params"):
+            _validate_sender_query_input_contract(
+                '{"template_id":"dot_contract_extract_v1","params":{"schema":"  ","table":null}}',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_unknown_template_raises(self) -> None:
+        """Unknown template IDs are rejected by allow-list."""
+        with pytest.raises(Exception, match="not allow-listed"):
+            _validate_sender_query_input_contract(
+                '{"template_id":"unknown_template","params":{"schema":"dot","table":"contract_data"}}',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_invalid_json_raises(self) -> None:
+        """Malformed JSON input fails with clear error."""
+        with pytest.raises(Exception, match="must be valid JSON"):
+            _validate_sender_query_input_contract(
+                "{invalid_json",
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_row_limit_exceeds_template_max_raises(self) -> None:
+        """Template-specific row limit cap is enforced."""
+        template_max = int(
+            ALLOWLISTED_QUERY_TEMPLATES["dot_contract_extract_v1"]["max_row_limit"]
+        )
+        payload = (
+            "{"
+            '"template_id":"dot_contract_extract_v1",'
+            '"params":{"schema":"dot","table":"contract_data"},'
+            f'"row_limit":{template_max + 1}'
+            "}"
+        )
+        with pytest.raises(Exception, match="exceeds allow-listed template max"):
+            _validate_sender_query_input_contract(
+                payload,
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_global_cap_overrides_looser_template(self) -> None:
+        """Global caps are enforced even if template caps are configured higher."""
+        looser_template = {
+            "required_params": {"schema", "table"},
+            "max_row_limit": 999_999,
+            "max_timeout_seconds": 9_999,
+        }
+        with patch.dict(
+            ALLOWLISTED_QUERY_TEMPLATES,
+            {"dot_contract_extract_v1": looser_template},
+            clear=False,
+        ):
+            with pytest.raises(Exception, match="exceeds allow-listed template max"):
+                _validate_sender_query_input_contract(
+                    '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":5001,"timeout_seconds":30}',
+                    max_query_row_limit=5000,
+                    max_query_timeout_seconds=600,
+                )
+
+
 class TestSenderWorkflow:
     """Tests for _create_sender_workflow()."""
 
@@ -179,6 +275,42 @@ class TestSenderWorkflow:
                     
                     exit_code = _create_sender_workflow(config)
                     assert exit_code == 0
+
+    def test_sender_workflow_query_mode_missing_contract_logs_audit_failure(self) -> None:
+        """Query mode fails fast and emits extract/pipeline failure audit logs when contract is missing."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json="",
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+            with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
+                exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 1
+        mock_extract_log.assert_called_once()
+        extract_details = mock_extract_log.call_args.kwargs["details"]
+        assert extract_details["step"] == "query_contract_validation"
+        assert "SENDER_QUERY_INPUT_JSON is required" in extract_details["error"]
+        mock_complete_log.assert_called_once()
+
+    def test_sender_workflow_query_mode_unknown_template_logs_audit_failure(self) -> None:
+        """Query mode rejects unknown template IDs and logs validation errors."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"bad_template","params":{"schema":"dot","table":"contract_data"}}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+            exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 1
+        mock_extract_log.assert_called_once()
+        extract_details = mock_extract_log.call_args.kwargs["details"]
+        assert extract_details["step"] == "query_contract_validation"
+        assert "not allow-listed" in extract_details["error"]
 
     def test_sender_workflow_requires_sender_file(self) -> None:
         """Sender workflow succeeds gracefully when no sender data directory is configured (idempotent)."""

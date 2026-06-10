@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+from pydantic import BaseModel, Field, ValidationError
+
 from .audit.events import EventOutcome
 from .audit.logger import (
     log_compress,
@@ -44,6 +46,7 @@ from .models.manifest import (
     apply_archive_field_naming,
 )
 from .policy import PolicyApprover
+from .query_templates import ALLOWLISTED_QUERY_TEMPLATES
 from .receiver.landing import ReceiverLandingZone
 from .receiver.store import ReceiverTargetStore
 from .sftp import create_sftp_client_from_secrets_manager
@@ -63,6 +66,15 @@ DONE_MARKER_SUFFIX = ".done"
 VALID_SENDER_INPUT_MODES = {"file", "query"}
 
 T = TypeVar("T")
+
+
+class SenderQueryInputContract(BaseModel):
+    """Runtime query input contract for sender query mode."""
+
+    template_id: str = Field(min_length=1)
+    params: dict[str, Any]
+    row_limit: int = Field(default=10_000, ge=1)
+    timeout_seconds: int = Field(default=60, ge=1)
 
 
 def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
@@ -110,6 +122,188 @@ def _extract_data(config: AgentConfig) -> None:
     Phase 2 can implement agency-side extraction logic here.
     """
     _ = config
+
+
+def _validate_sender_query_input_contract(
+    raw_contract_json: str,
+    max_query_row_limit: int,
+    max_query_timeout_seconds: int,
+) -> SenderQueryInputContract:
+    """Validate sender-provided query input payload.
+
+    Raises
+    ------
+    ConfigurationError
+        When payload is missing, malformed, not allow-listed, or missing required params.
+    """
+    if not raw_contract_json or not raw_contract_json.strip():
+        raise ConfigurationError(
+            "SENDER_QUERY_INPUT_JSON is required when SENDER_INPUT_MODE=query"
+        )
+
+    try:
+        payload = json.loads(raw_contract_json)
+    except json.JSONDecodeError as exc:
+        raise ConfigurationError(
+            f"SENDER_QUERY_INPUT_JSON must be valid JSON: {exc}"
+        ) from exc
+
+    try:
+        contract = SenderQueryInputContract.model_validate(payload)
+    except ValidationError as exc:
+        raise ConfigurationError(
+            f"Invalid query input contract: {exc}"
+        ) from exc
+
+    template_spec = ALLOWLISTED_QUERY_TEMPLATES.get(contract.template_id)
+    if template_spec is None:
+        raise ConfigurationError(
+            "Query template is not allow-listed: "
+            f"template_id='{contract.template_id}'. "
+            f"Allowed templates: {sorted(ALLOWLISTED_QUERY_TEMPLATES.keys())}"
+        )
+
+    required_params = set(template_spec.get("required_params", set()))
+    missing_required_params = sorted(
+        param_name
+        for param_name in required_params
+        if (
+            param_name not in contract.params
+            or contract.params[param_name] is None
+            or (
+                isinstance(contract.params[param_name], str)
+                and not contract.params[param_name].strip()
+            )
+        )
+    )
+    if missing_required_params:
+        raise ConfigurationError(
+            "Missing required query params for template "
+            f"'{contract.template_id}': {missing_required_params}"
+        )
+
+    template_max_row_limit = int(template_spec.get("max_row_limit", max_query_row_limit))
+    effective_max_row_limit = min(template_max_row_limit, max_query_row_limit)
+    if contract.row_limit > effective_max_row_limit:
+        raise ConfigurationError(
+            f"row_limit {contract.row_limit} exceeds allow-listed template max "
+            f"{effective_max_row_limit} for template '{contract.template_id}'"
+        )
+
+    template_max_timeout_seconds = int(
+        template_spec.get("max_timeout_seconds", max_query_timeout_seconds)
+    )
+    effective_max_timeout_seconds = min(
+        template_max_timeout_seconds, max_query_timeout_seconds
+    )
+    if contract.timeout_seconds > effective_max_timeout_seconds:
+        raise ConfigurationError(
+            f"timeout_seconds {contract.timeout_seconds} exceeds allow-listed template max "
+            f"{effective_max_timeout_seconds} for template '{contract.template_id}'"
+        )
+
+    return contract
+
+
+def _create_sender_query_workflow(config: AgentConfig) -> None:
+    """Validate query-mode input contract and fail fast when invalid.
+
+    Query execution will be picked up as part of the next logical task,
+    RED-73/RED-92-Implement Ibis-based query extraction adapter. For now,
+    this path enforces contract validation, allow-listing, and audit-visible errors.
+    """
+    log_pipeline_start(
+        transfer_session_id=config.transfer_session_id,
+        sender_agency=config.sender_agency,
+        receiver_agency=config.receiver_agency,
+    )
+
+    try:
+        contract = _validate_sender_query_input_contract(
+            config.sender_query_input_json,
+            max_query_row_limit=config.max_query_row_limit,
+            max_query_timeout_seconds=config.max_query_timeout_seconds,
+        )
+
+        LOGGER.info(
+            prefix_log_message(
+                "Validated sender query input contract",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_query_contract_validated",
+                "template_id": contract.template_id,
+                "param_names": sorted(contract.params.keys()),
+                "row_limit": contract.row_limit,
+                "timeout_seconds": contract.timeout_seconds,
+            },
+        )
+
+        message = (
+            "Query mode input validated; query execution will be picked up as part of "
+            "RED-73/RED-92-Implement Ibis-based query extraction adapter"
+        )
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_contract",
+                "template_id": contract.template_id,
+                "error": message,
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": message},
+        )
+        LOGGER.error(
+            prefix_log_message(
+                message,
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_query_mode_unimplemented",
+                "template_id": contract.template_id,
+            },
+        )
+        return
+    except ConfigurationError as exc:
+        LOGGER.error(
+            prefix_log_message(
+                f"Invalid sender query input contract: {exc}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_query_contract_invalid",
+                "error_type": type(exc).__name__,
+            },
+        )
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_contract_validation",
+                "error": str(exc),
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": str(exc)},
+        )
+        return
 
 
 def _select_sender_input_mode(raw_mode: str | None) -> tuple[str, str]:
@@ -532,6 +726,10 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 "selection_reason": selection_reason,
             },
         )
+
+        if selected_mode == "query":
+            _create_sender_query_workflow(config)
+            return 1
 
         if not config.sender_data_directory:
             LOGGER.warning(
