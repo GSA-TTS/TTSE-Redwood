@@ -17,6 +17,7 @@ from redwood_dataagent.agent import (
     _mark_file_processed,
     _parse_s3_path,
     _scan_sender_directory,
+    _select_sender_input_mode,
     run_agent,
 )
 from redwood_dataagent.config import AgentConfig
@@ -75,6 +76,40 @@ class TestComputeChecksum:
 
         with pytest.raises(StorageError, match="Failed to read file"):
             _compute_checksum(missing_file)
+
+
+class TestSenderInputModeSelection:
+    """Tests for sender input mode normalization and fallback behavior."""
+
+    def test_select_sender_input_mode_explicit_file(self) -> None:
+        """Explicit file mode is accepted as-is."""
+        mode, reason = _select_sender_input_mode("file")
+        assert mode == "file"
+        assert reason == "explicit"
+
+    def test_select_sender_input_mode_explicit_query_case_insensitive(self) -> None:
+        """Explicit query mode is normalized to lowercase."""
+        mode, reason = _select_sender_input_mode("QUERY")
+        assert mode == "query"
+        assert reason == "explicit"
+
+    def test_select_sender_input_mode_missing_defaults_to_file(self) -> None:
+        """Missing mode defaults to file mode."""
+        mode, reason = _select_sender_input_mode(None)
+        assert mode == "file"
+        assert reason == "default_missing"
+
+    def test_select_sender_input_mode_blank_defaults_to_file(self) -> None:
+        """Blank mode defaults to file mode."""
+        mode, reason = _select_sender_input_mode("   ")
+        assert mode == "file"
+        assert reason == "default_blank"
+
+    def test_select_sender_input_mode_invalid_defaults_to_file(self) -> None:
+        """Invalid mode falls back to file mode with reason."""
+        mode, reason = _select_sender_input_mode("invalid-mode")
+        assert mode == "file"
+        assert reason.startswith("default_invalid:")
 
 
 class TestSenderWorkflow:

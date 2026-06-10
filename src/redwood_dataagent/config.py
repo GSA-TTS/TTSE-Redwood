@@ -45,6 +45,7 @@ class AgentConfig:
     sender_data_directory: str
     sftp_endpoints: list[str]
     sftp_secrets_manager_name: str
+    sender_input_mode: str = ""
 
 
 def load_config() -> AgentConfig:
@@ -88,6 +89,10 @@ def load_config() -> AgentConfig:
         Must have keys: ``user``, ``private-key``, ``public-key``.
         Auto-derived as ``{TENANT}-core-{ENVIRONMENT}-redwood-sftp-credentials``
         if not explicitly provided.
+    SENDER_INPUT_MODE
+        Sender adapter input mode selector. Supported values are ``"file"`` and
+        ``"query"``. Missing/blank/invalid values are normalized later by the
+        sender workflow and default to ``"file"``.
 
     Returns
     -------
@@ -183,4 +188,5 @@ def load_config() -> AgentConfig:
         sender_data_directory=sender_data_directory,
         sftp_endpoints=sftp_endpoints,
         sftp_secrets_manager_name=sftp_secrets_manager_name,
+        sender_input_mode=os.getenv("SENDER_INPUT_MODE", ""),
     )

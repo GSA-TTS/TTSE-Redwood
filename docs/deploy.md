@@ -51,6 +51,7 @@ Sender-only:
 
 - `SFTP_ENDPOINTS`: comma-separated endpoints; required in sender mode.
 - `SFTP_SECRETS_MANAGER_NAME`: optional; default derived as `{TENANT}-core-{ENVIRONMENT}-redwood-sftp-credentials`.
+- `SENDER_INPUT_MODE`: sender input mode selector. Supported values: `file`, `query`. Default/fallback is `file`.
 
 Receiver-only:
 
@@ -111,6 +112,7 @@ Set:
 - `LOG_LEVEL=INFO` (or as needed)
 - `SFTP_ENDPOINTS=<endpoint1,endpoint2,...>`
 - `SFTP_SECRETS_MANAGER_NAME=<secret_name>` (optional override)
+- `SENDER_INPUT_MODE=file` (recommended default; set to `query` when query extraction is enabled)
 
 Example container run:
 
@@ -123,6 +125,7 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -e LOG_LEVEL=INFO \
   -e SFTP_ENDPOINTS=sftp.example.org \
+  -e SENDER_INPUT_MODE=file \
   ghcr.io/<org>/<image>:<tag>
 ```
 
@@ -188,6 +191,8 @@ spec:
               value: INFO
             - name: SFTP_ENDPOINTS
               value: sftp.example.org
+            - name: SENDER_INPUT_MODE
+              value: file
 ```
 
 ## 10. Validation Checklist After Deployment

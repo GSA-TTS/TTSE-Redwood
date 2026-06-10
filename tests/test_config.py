@@ -23,6 +23,7 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SENDER_DATA_DIRECTORY",
         "SFTP_ENDPOINTS",
         "SFTP_SECRETS_MANAGER_NAME",
+        "SENDER_INPUT_MODE",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -75,6 +76,29 @@ def test_load_config_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
         config.agent_mode = "sender"  # type: ignore[misc]
+
+
+def test_load_config_sender_input_mode_default_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SENDER_INPUT_MODE defaults to blank and is normalized by sender workflow."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+
+    config = load_config()
+
+    assert config.sender_input_mode == ""
+
+
+def test_load_config_sender_input_mode_preserves_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configured SENDER_INPUT_MODE value is loaded as provided."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("SENDER_INPUT_MODE", "QUERY")
+
+    config = load_config()
+
+    assert config.sender_input_mode == "QUERY"
 
 
 # ---------------------------------------------------------------------------
