@@ -37,6 +37,7 @@ from .exceptions import (
     ConfigurationError,
     StorageError,
 )
+from .query_adapter import execute_query
 from .logging_utils import get_logger, logging_context, prefix_log_message
 from .models.manifest import (
     ChecksumAlgorithm,
@@ -206,11 +207,27 @@ def _validate_sender_query_input_contract(
 
 
 def _create_sender_query_workflow(config: AgentConfig) -> None:
-    """Validate query-mode input contract and fail fast when invalid.
+    """Execute validated query contract and produce staged CSV output.
 
-    Query execution will be picked up as part of the next logical task,
-    RED-73/RED-92-Implement Ibis-based query extraction adapter. For now,
-    this path enforces contract validation, allow-listing, and audit-visible errors.
+    Orchestrates query execution and staging:
+    1. Validate query input contract (schema, table, filters, row limits, timeout)
+    2. Execute query via Ibis against PostgreSQL
+    3. Write results to CSV file
+    4. Upload to sender staging S3 bucket
+    5. Log extraction outcome and completion
+
+    Integration with the existing sender transfer pipeline (policy check, compression,
+    manifest generation, and transfer artifact staging) will be addressed in RED-74/RED-93.
+
+    Query execution includes:
+    - Timeout enforcement via signal handlers
+    - Result metadata tracking (row count, file size, duration)
+    - Comprehensive error handling with actionable details
+
+    Returns
+    -------
+    None
+        Outcomes are logged via audit trail.
     """
     log_pipeline_start(
         transfer_session_id=config.transfer_session_id,
@@ -240,40 +257,106 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
             },
         )
 
-        message = (
-            "Query mode input validated; query execution will be picked up as part of "
-            "RED-73/RED-92-Implement Ibis-based query extraction adapter"
+        # Execute query and stage output
+        LOGGER.info(
+            prefix_log_message(
+                "Executing query via Ibis adapter",
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "query_execution_start",
+                "template_id": contract.template_id,
+            },
         )
+
+        result = execute_query(contract, config)
+
+        if result.skipped:
+            log_extract_data(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                outcome=EventOutcome.SUCCESS,
+                details={
+                    "step": "query_execution_skipped",
+                    "template_id": contract.template_id,
+                    "reason": "matching query success marker already exists",
+                    "fingerprint": result.query_fingerprint,
+                    "marker_key": result.marker_key,
+                },
+            )
+            log_pipeline_complete(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                outcome=EventOutcome.SUCCESS,
+                details={
+                    "template_id": contract.template_id,
+                    "skipped": True,
+                    "reason": "matching query success marker already exists",
+                    "fingerprint": result.query_fingerprint,
+                    "marker_key": result.marker_key,
+                },
+            )
+
+            LOGGER.info(
+                prefix_log_message(
+                    "Query execution skipped; matching success marker already exists",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
+                extra={
+                    "event": "sender_query_execution_skipped",
+                    "template_id": contract.template_id,
+                    "marker_key": result.marker_key,
+                },
+            )
+            return
+
+        # Log extraction success with metadata
         log_extract_data(
             transfer_session_id=config.transfer_session_id,
             sender_agency=config.sender_agency,
             receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.FAILURE,
+            outcome=EventOutcome.SUCCESS,
             details={
-                "step": "query_contract",
+                "step": "query_execution",
                 "template_id": contract.template_id,
-                "error": message,
+                "row_count": result.row_count,
+                "file_size_bytes": result.file_size_bytes,
+                "duration_seconds": round(result.execution_duration_seconds, 2),
+                "output_file": result.output_file_path,
             },
         )
+
         log_pipeline_complete(
             transfer_session_id=config.transfer_session_id,
             sender_agency=config.sender_agency,
             receiver_agency=config.receiver_agency,
-            outcome=EventOutcome.FAILURE,
-            details={"error": message},
+            outcome=EventOutcome.SUCCESS,
+            details={
+                "template_id": contract.template_id,
+                "row_count": result.row_count,
+                "file_size_bytes": result.file_size_bytes,
+                "duration_seconds": round(result.execution_duration_seconds, 2),
+            },
         )
-        LOGGER.error(
+
+        LOGGER.info(
             prefix_log_message(
-                message,
+                "Query execution completed successfully",
                 agent_mode=config.agent_mode,
                 transfer_session_id=config.transfer_session_id,
             ),
             extra={
-                "event": "sender_query_mode_unimplemented",
+                "event": "sender_query_execution_success",
                 "template_id": contract.template_id,
+                "row_count": result.row_count,
+                "duration_seconds": result.execution_duration_seconds,
             },
         )
         return
+
     except ConfigurationError as exc:
         LOGGER.error(
             prefix_log_message(
@@ -302,6 +385,70 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
             receiver_agency=config.receiver_agency,
             outcome=EventOutcome.FAILURE,
             details={"error": str(exc)},
+        )
+        return
+
+    except StorageError as exc:
+        LOGGER.error(
+            prefix_log_message(
+                f"Query execution failed: {exc}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_query_execution_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_execution",
+                "error": str(exc),
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": str(exc)},
+        )
+        return
+
+    except Exception as exc:
+        error_message = f"Unexpected error during query execution: {exc}"
+        LOGGER.error(
+            prefix_log_message(
+                error_message,
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_query_execution_unexpected_error",
+                "error_type": type(exc).__name__,
+            },
+        )
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_execution",
+                "error": error_message,
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": error_message},
         )
         return
 
@@ -729,7 +876,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
         if selected_mode == "query":
             _create_sender_query_workflow(config)
-            return 1
+            return 0
 
         if not config.sender_data_directory:
             LOGGER.warning(
