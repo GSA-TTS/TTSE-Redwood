@@ -52,6 +52,14 @@ Sender-only:
 - `SFTP_ENDPOINTS`: comma-separated endpoints; required in sender mode.
 - `SFTP_SECRETS_MANAGER_NAME`: optional; default derived as `{TENANT}-core-{ENVIRONMENT}-redwood-sftp-credentials`.
 - `SENDER_INPUT_MODE`: sender input mode selector. Supported values: `file`, `query`. Default/fallback is `file`.
+- `SENDER_QUERY_INPUT_JSON`: required when `SENDER_INPUT_MODE=query`; JSON payload with `template_id`, `params`, optional `row_limit`, and optional `timeout_seconds`.
+- `MAX_QUERY_ROW_LIMIT`: optional global query row cap; defaults to `1000000` when not set.
+- `MAX_QUERY_TIMEOUT_SECONDS`: optional global query timeout cap in seconds; defaults to `600` when not set.
+
+Query-template allow-list note:
+
+- Allowed query templates are maintained in `src/redwood_dataagent/query_templates.py`.
+- This allow-list is expected to be expanded or modified as required when onboarding additional agencies.
 
 Receiver-only:
 
@@ -113,6 +121,9 @@ Set:
 - `SFTP_ENDPOINTS=<endpoint1,endpoint2,...>`
 - `SFTP_SECRETS_MANAGER_NAME=<secret_name>` (optional override)
 - `SENDER_INPUT_MODE=file` (recommended default; set to `query` when query extraction is enabled)
+- `SENDER_QUERY_INPUT_JSON=<json payload>` (required when `SENDER_INPUT_MODE=query`)
+- `MAX_QUERY_ROW_LIMIT=<int>` (optional global cap; defaults to `1000000`)
+- `MAX_QUERY_TIMEOUT_SECONDS=<int>` (optional global cap; defaults to `600`)
 
 Example container run:
 
