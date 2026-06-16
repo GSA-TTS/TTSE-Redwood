@@ -130,6 +130,12 @@ Future database expansion (high level):
   - Engine-specific connection settings/secrets (host/port/auth fields as required)
   - Container dependencies/drivers needed by that engine
 
+Dependency/install note for future engines:
+
+- Current package dependency includes `ibis-framework[postgres]` for the active `postgres` backend.
+- If a new database backend is added, update package dependencies to include that backend's Ibis extra (or equivalent driver set).
+- If backend dependencies are refactored into optional install groups, update container install commands (for example in Docker build and CI install steps) to install the matching group.
+
 - Set `SENDER_QUERY_INPUT_JSON` to a JSON payload with your query contract
 - Ensure the template ID in the contract is allow-listed in `src/redwood_dataagent/query_templates.py`
 - Query results are staged to S3 under `query/{transfer_session_id}/{template_id}_results.csv`
