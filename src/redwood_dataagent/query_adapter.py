@@ -208,7 +208,7 @@ def _get_ibis_connection(schema_name: str) -> Any:
         raise
     except ImportError as exc:
         raise ConfigurationError(
-            "Ibis library is not installed. Install with: pip install ibis-framework[postgres]"
+            "Ibis postgres backend is unavailable. Install with: pip install ibis-framework[postgres]"
         ) from exc
     except Exception as exc:
         raise ConfigurationError(
