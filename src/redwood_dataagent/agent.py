@@ -241,6 +241,38 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
             max_query_row_limit=config.max_query_row_limit,
             max_query_timeout_seconds=config.max_query_timeout_seconds,
         )
+    except ConfigurationError as exc:
+        LOGGER.error(
+            prefix_log_message(
+                f"Invalid sender query input contract: {exc}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_query_contract_invalid",
+                "error_type": type(exc).__name__,
+            },
+        )
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_contract_validation",
+                "error": str(exc),
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": str(exc)},
+        )
+        return
+
+    try:
 
         LOGGER.info(
             prefix_log_message(
@@ -360,12 +392,12 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
     except ConfigurationError as exc:
         LOGGER.error(
             prefix_log_message(
-                f"Invalid sender query input contract: {exc}",
+                f"Query execution configuration failed: {exc}",
                 agent_mode=config.agent_mode,
                 transfer_session_id=config.transfer_session_id,
             ),
             extra={
-                "event": "sender_query_contract_invalid",
+                "event": "sender_query_execution_configuration_failed",
                 "error_type": type(exc).__name__,
             },
         )
@@ -375,7 +407,7 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
             receiver_agency=config.receiver_agency,
             outcome=EventOutcome.FAILURE,
             details={
-                "step": "query_contract_validation",
+                "step": "query_execution",
                 "error": str(exc),
             },
         )

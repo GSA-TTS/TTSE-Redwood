@@ -23,7 +23,7 @@ from redwood_dataagent.agent import (
     run_agent,
 )
 from redwood_dataagent.config import AgentConfig
-from redwood_dataagent.exceptions import StorageError
+from redwood_dataagent.exceptions import ConfigurationError, StorageError
 from redwood_dataagent.logging_utils import set_agent_mode, set_transfer_session_id
 from redwood_dataagent.models.manifest import ChecksumAlgorithm
 
@@ -387,6 +387,28 @@ class TestSenderWorkflow:
         mock_complete_log.assert_called_once()
         complete_call = mock_complete_log.call_args
         assert complete_call.kwargs["outcome"] == EventOutcome.FAILURE
+
+    def test_sender_workflow_query_mode_execution_configuration_error_logs_query_execution_failure(self) -> None:
+        """Execution-time ConfigurationError is logged as query execution failure, not contract validation."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+                mock_execute.side_effect = ConfigurationError(
+                    "Ibis library is not installed. Install with: pip install ibis-framework[postgres]"
+                )
+
+                exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0
+        mock_extract_log.assert_called_once()
+        extract_details = mock_extract_log.call_args.kwargs["details"]
+        assert extract_details["step"] == "query_execution"
+        assert "Ibis library is not installed" in extract_details["error"]
 
     def test_sender_workflow_requires_sender_file(self) -> None:
         """Sender workflow succeeds gracefully when no sender data directory is configured (idempotent)."""
