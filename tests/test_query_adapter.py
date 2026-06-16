@@ -89,7 +89,7 @@ class TestGetIbisConnection:
     def test_get_ibis_connection_missing_ibis_raises_configuration_error(self) -> None:
         """Missing Ibis library raises ConfigurationError."""
         with patch("redwood_dataagent.query_adapter.ibis", None):
-            with pytest.raises(ConfigurationError, match="Ibis library is not installed"):
+            with pytest.raises(ConfigurationError, match="Ibis postgres backend is unavailable"):
                 _get_ibis_connection("dot")
 
     def test_get_ibis_connection_database_error_raises_configuration_error(self) -> None:
