@@ -189,6 +189,39 @@ class TestBuildIbisQuery:
 
             mock_table.order_by.assert_called_once()
 
+    def test_build_ibis_query_falls_back_when_schema_kwarg_is_unsupported(self) -> None:
+        """Backends without schema= support should fall back to database=."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={
+                "schema": "dot",
+                "table": "contract_data",
+            },
+        )
+
+        with patch("redwood_dataagent.query_adapter._get_ibis_connection") as mock_get_conn:
+            mock_table = MagicMock()
+            mock_connection = MagicMock()
+
+            def _table_side_effect(*args, **kwargs):
+                if "schema" in kwargs:
+                    raise TypeError("SQLBackend.table() got an unexpected keyword argument 'schema'")
+                return mock_table
+
+            mock_connection.table.side_effect = _table_side_effect
+            mock_get_conn.return_value = mock_connection
+
+            ibis_table, _ = _build_ibis_query(contract)
+
+            assert ibis_table is mock_table
+            assert mock_connection.table.call_count == 2
+            assert mock_connection.table.call_args_list[0].kwargs == {
+                "schema": "dot",
+            }
+            assert mock_connection.table.call_args_list[1].kwargs == {
+                "database": "dot",
+            }
+
     def test_build_ibis_query_missing_schema_raises(self) -> None:
         """Query without schema raises ConfigurationError."""
         contract = SenderQueryInputContract(

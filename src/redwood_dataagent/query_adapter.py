@@ -248,7 +248,14 @@ def _build_ibis_query(
 
         # Connect and load table
         con = _get_ibis_connection(schema_name)
-        table = con.table(table_name, schema=schema_name)
+        try:
+            table = con.table(table_name, schema=schema_name)
+        except TypeError as exc:
+            # Some Ibis SQL backends do not accept the schema kwarg and instead
+            # use database= for namespace selection.
+            if "unexpected keyword argument 'schema'" not in str(exc):
+                raise
+            table = con.table(table_name, database=schema_name)
 
         table = _apply_filters(table, filters)
         table = _apply_select_fields(table, select_fields)
