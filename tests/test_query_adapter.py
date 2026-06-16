@@ -88,7 +88,7 @@ class TestGetIbisConnection:
 
     def test_get_ibis_connection_missing_ibis_raises_configuration_error(self) -> None:
         """Missing Ibis library raises ConfigurationError."""
-        with patch("redwood_dataagent.query_adapter.ibis", side_effect=ImportError("No module named ibis")):
+        with patch("redwood_dataagent.query_adapter.ibis", None):
             with pytest.raises(ConfigurationError, match="Ibis library is not installed"):
                 _get_ibis_connection("dot")
 

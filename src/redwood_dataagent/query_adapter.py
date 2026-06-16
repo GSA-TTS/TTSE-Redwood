@@ -155,7 +155,7 @@ def _get_ibis_connection(schema_name: str) -> Any:
     import os
 
     try:
-        if ibis is None or getattr(ibis, "side_effect", None) is not None:
+        if ibis is None:
             raise ImportError("No module named ibis")
 
         db_engine = os.environ.get("DB_ENGINE", "postgres").strip().lower()
