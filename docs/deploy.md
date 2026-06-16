@@ -108,6 +108,37 @@ SFTP secret payload must include:
 
 Store and mount these using your platform-native secret manager and workload identity policy.
 
+## 6.1 Query Mode (Ibis Adapter) Requirements
+
+When deploying with `SENDER_INPUT_MODE=query`:
+
+- Source database must be accessible from the container's network
+- RDS credentials should be injected as environment variables from a deployment-specific secret source configured by your platform
+- Set `DB_ENGINE=<engine>` (default is `postgres`; current implementation target)
+- The following environment variables must be present (provided by your deployment configuration):
+  - `DB_HOST` — RDS endpoint hostname
+  - `DB_PORT` — RDS port (default: `5432`)
+  - `DB_NAME` — database name
+  - `DB_USERNAME` — database user
+  - `DB_PASSWORD` — database password
+
+Future database expansion (high level):
+
+- Current implementation target is `DB_ENGINE=postgres`.
+- To onboard a different database engine, deployment updates will be required for:
+  - Engine-specific connector configuration (`DB_ENGINE` value)
+  - Engine-specific connection settings/secrets (host/port/auth fields as required)
+  - Container dependencies/drivers needed by that engine
+
+- Set `SENDER_QUERY_INPUT_JSON` to a JSON payload with your query contract
+- Ensure the template ID in the contract is allow-listed in `src/redwood_dataagent/query_templates.py`
+- Query results are staged to S3 under `query/{transfer_session_id}/{template_id}_results.csv`
+- Query mode writes a success marker after a completed run; repeated runs with the same query criteria and source DB context are skipped
+
+See the [README](../README.md) for detailed query mode architecture, contract structure, and examples.
+
+Integration with the existing sender transfer pipeline (policy check, compression, manifest generation, and transfer artifact staging) will be addressed in RED-74/RED-93.
+
 ## 7. Deploy as Sender
 
 Set:
@@ -121,6 +152,7 @@ Set:
 - `SFTP_ENDPOINTS=<endpoint1,endpoint2,...>`
 - `SFTP_SECRETS_MANAGER_NAME=<secret_name>` (optional override)
 - `SENDER_INPUT_MODE=file` (recommended default; set to `query` when query extraction is enabled)
+- `DB_ENGINE=<engine>` (required when `SENDER_INPUT_MODE=query`; default is `postgres`)
 - `SENDER_QUERY_INPUT_JSON=<json payload>` (required when `SENDER_INPUT_MODE=query`)
 - `MAX_QUERY_ROW_LIMIT=<int>` (optional global cap; defaults to `1000000`)
 - `MAX_QUERY_TIMEOUT_SECONDS=<int>` (optional global cap; defaults to `600`)

@@ -288,7 +288,7 @@ class TestSenderWorkflow:
             with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
                 exit_code = _create_sender_workflow(config)
 
-        assert exit_code == 1
+        assert exit_code == 0  # Exit code 0 (workflow ran); outcome in audit logs
         mock_extract_log.assert_called_once()
         extract_details = mock_extract_log.call_args.kwargs["details"]
         assert extract_details["step"] == "query_contract_validation"
@@ -306,11 +306,87 @@ class TestSenderWorkflow:
         with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
             exit_code = _create_sender_workflow(config)
 
-        assert exit_code == 1
+        assert exit_code == 0  # Exit code 0 (workflow ran); outcome in audit logs
         mock_extract_log.assert_called_once()
         extract_details = mock_extract_log.call_args.kwargs["details"]
         assert extract_details["step"] == "query_contract_validation"
         assert "not allow-listed" in extract_details["error"]
+
+    def test_sender_workflow_query_mode_success_executes_adapter(self) -> None:
+        """Query mode successfully executes query and logs success outcome."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+                with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
+                    from redwood_dataagent.query_adapter import QueryExecutionResult
+
+                    # Mock successful query execution
+                    mock_result = QueryExecutionResult(
+                        row_count=42,
+                        file_size_bytes=5120,
+                        execution_duration_seconds=1.23,
+                        output_file_path="s3://bucket/query/session-123/dot_contract_extract_v1_results.csv",
+                    )
+                    mock_execute.return_value = mock_result
+
+                    exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0  # Query mode returns 0 (workflow ran successfully)
+        mock_execute.assert_called_once()
+
+        # Verify extraction was logged as SUCCESS with metadata
+        mock_extract_log.assert_called_once()
+        extract_call = mock_extract_log.call_args
+        assert extract_call.kwargs["outcome"] == EventOutcome.SUCCESS
+        extract_details = extract_call.kwargs["details"]
+        assert extract_details["row_count"] == 42
+        assert extract_details["file_size_bytes"] == 5120
+        assert extract_details["template_id"] == "dot_contract_extract_v1"
+
+        # Verify pipeline completion was logged as SUCCESS
+        mock_complete_log.assert_called_once()
+        complete_call = mock_complete_log.call_args
+        assert complete_call.kwargs["outcome"] == EventOutcome.SUCCESS
+        complete_details = complete_call.kwargs["details"]
+        assert complete_details["row_count"] == 42
+
+    def test_sender_workflow_query_mode_adapter_failure_logs_failure(self) -> None:
+        """Query mode handles adapter failures and logs error outcome."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+                with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
+                    from redwood_dataagent.exceptions import StorageError
+
+                    # Mock query timeout
+                    mock_execute.side_effect = StorageError("Query execution exceeded 30s timeout")
+
+                    exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0  # Exit code is 0 (workflow ran); outcome captured in audit logs
+        mock_extract_log.assert_called_once()
+
+        # Verify extraction was logged as FAILURE
+        extract_call = mock_extract_log.call_args
+        assert extract_call.kwargs["outcome"] == EventOutcome.FAILURE
+        extract_details = extract_call.kwargs["details"]
+        assert extract_details["step"] == "query_execution"
+        assert "timeout" in extract_details["error"].lower()
+
+        # Verify pipeline completion was logged as FAILURE
+        mock_complete_log.assert_called_once()
+        complete_call = mock_complete_log.call_args
+        assert complete_call.kwargs["outcome"] == EventOutcome.FAILURE
 
     def test_sender_workflow_requires_sender_file(self) -> None:
         """Sender workflow succeeds gracefully when no sender data directory is configured (idempotent)."""
