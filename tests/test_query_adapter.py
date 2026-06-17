@@ -360,10 +360,16 @@ class TestUploadResultsToS3:
             mock_client = MagicMock()
             mock_s3_client_class.return_value = mock_client
 
-            s3_key = _upload_results_to_s3(local_file, config, "dot_contract_extract_v1", "test-session-001")
+            s3_key = _upload_results_to_s3(
+                local_file,
+                config,
+                "dot_contract_extract_v1",
+                "test-session-001",
+                "ce9b55325ce3708377997a21ae44be2b72e0de16aa5f7a9f4234e020f8a7ea07",
+            )
 
             assert "query/test-session-001" in s3_key
-            assert "dot_contract_extract_v1" in s3_key
+            assert "dot_contract_extract_v1_ce9b55325ce3_results.csv" in s3_key
             mock_client.upload_file.assert_called_once()
 
     def test_upload_results_to_s3_failure_raises_storage_error(self, tmp_path: Path) -> None:
@@ -394,7 +400,13 @@ class TestUploadResultsToS3:
             mock_s3_client_class.return_value = mock_client
 
             with pytest.raises(StorageError, match="Failed to upload query results"):
-                _upload_results_to_s3(local_file, config, "dot_contract_extract_v1", "test-session-001")
+                _upload_results_to_s3(
+                    local_file,
+                    config,
+                    "dot_contract_extract_v1",
+                    "test-session-001",
+                    "ce9b55325ce3708377997a21ae44be2b72e0de16aa5f7a9f4234e020f8a7ea07",
+                )
 
 
 class TestExecuteQuery:
@@ -443,7 +455,7 @@ class TestExecuteQuery:
                 {"contract_id": "2", "vendor_name": "Beta Inc"},
             ]
             mock_execute.return_value = rows
-            mock_upload.return_value = "query/test-session-001/dot_contract_extract_v1_results.csv"
+            mock_upload.return_value = "query/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
 
             result = execute_query(contract, config)
 

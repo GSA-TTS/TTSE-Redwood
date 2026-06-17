@@ -330,7 +330,7 @@ class TestSenderWorkflow:
                         row_count=42,
                         file_size_bytes=5120,
                         execution_duration_seconds=1.23,
-                        output_file_path="s3://bucket/query/session-123/dot_contract_extract_v1_results.csv",
+                        output_file_path="s3://bucket/query/session-123/dot_contract_extract_v1_ce9b55325ce3_results.csv",
                     )
                     mock_execute.return_value = mock_result
 
