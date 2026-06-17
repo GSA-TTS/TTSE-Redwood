@@ -50,6 +50,9 @@ if TYPE_CHECKING:
 LOGGER = get_logger("redwood_dataagent")
 SUPPORTED_DB_ENGINES = ("postgres",)
 QUERY_RESULT_FINGERPRINT_LENGTH = 12
+QUERY_MODE_ROOT_PREFIX = "query_mode"
+QUERY_MODE_OUTGOING_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/outgoing"
+QUERY_MODE_PROCESSED_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/processed"
 
 
 @dataclass
@@ -91,7 +94,7 @@ def _build_query_fingerprint(contract: SenderQueryInputContract) -> str:
 
 def _build_query_processed_marker_key(template_id: str, fingerprint: str) -> str:
     """Build S3 object key for a successful query execution marker."""
-    return f"query/processed/{template_id}/{fingerprint}.done"
+    return f"{QUERY_MODE_PROCESSED_PREFIX}/{template_id}/{fingerprint}.done"
 
 
 def _short_fingerprint(fingerprint: str, length: int = QUERY_RESULT_FINGERPRINT_LENGTH) -> str:
@@ -485,9 +488,12 @@ def _upload_results_to_s3(
         if S3Client is None:
             raise StorageError("S3 client is unavailable")
 
-        # Build S3 key: query/{transfer_session_id}/{template_id}_{fingerprint12}_results.csv
+        # Build S3 key: query_mode/outgoing/{transfer_session_id}/{template_id}_{fingerprint12}_results.csv
         short_fingerprint = _short_fingerprint(query_fingerprint)
-        s3_key = f"query/{transfer_session_id}/{template_id}_{short_fingerprint}_results.csv"
+        s3_key = (
+            f"{QUERY_MODE_OUTGOING_PREFIX}/{transfer_session_id}/"
+            f"{template_id}_{short_fingerprint}_results.csv"
+        )
 
         client = S3Client(aws_region=config.aws_region)
         client.upload_file(local_file, config.sender_staging_bucket, s3_key)
@@ -523,7 +529,7 @@ def execute_query(
     1. Build Ibis query from contract (schema, table, filters, select_fields, order_by)
     2. Execute with timeout enforcement
     3. Write results to local CSV file
-    4. Upload to S3 staging bucket under query/{transfer_session_id}/ prefix
+    4. Upload to S3 staging bucket under query_mode/outgoing/{transfer_session_id}/ prefix
     5. Return metadata (rows, bytes, duration)
 
     Integration with the existing sender transfer pipeline (policy check, compression,

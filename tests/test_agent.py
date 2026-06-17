@@ -321,20 +321,29 @@ class TestSenderWorkflow:
         )
 
         with patch("redwood_dataagent.agent.execute_query") as mock_execute:
-            with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
-                with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
-                    from redwood_dataagent.query_adapter import QueryExecutionResult
+            with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+                    with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
+                        from redwood_dataagent.query_adapter import QueryExecutionResult
 
-                    # Mock successful query execution
-                    mock_result = QueryExecutionResult(
-                        row_count=42,
-                        file_size_bytes=5120,
-                        execution_duration_seconds=1.23,
-                        output_file_path="s3://bucket/query/session-123/dot_contract_extract_v1_ce9b55325ce3_results.csv",
-                    )
-                    mock_execute.return_value = mock_result
+                        mock_client = MagicMock()
+                        mock_s3_class.return_value = mock_client
 
-                    exit_code = _create_sender_workflow(config)
+                        def mock_download(bucket, key, dest):
+                            dest.write_text("id,name\n1,example\n")
+
+                        mock_client.download_file.side_effect = mock_download
+
+                        # Mock successful query execution
+                        mock_result = QueryExecutionResult(
+                            row_count=42,
+                            file_size_bytes=5120,
+                            execution_duration_seconds=1.23,
+                            output_file_path="s3://bucket/query_mode/outgoing/session-123/dot_contract_extract_v1_ce9b55325ce3_results.csv",
+                        )
+                        mock_execute.return_value = mock_result
+
+                        exit_code = _create_sender_workflow(config)
 
         assert exit_code == 0  # Query mode returns 0 (workflow ran successfully)
         mock_execute.assert_called_once()
@@ -354,6 +363,54 @@ class TestSenderWorkflow:
         assert complete_call.kwargs["outcome"] == EventOutcome.SUCCESS
         complete_details = complete_call.kwargs["details"]
         assert complete_details["row_count"] == 42
+
+    def test_sender_workflow_query_mode_uses_existing_transfer_pipeline(self) -> None:
+        """Query mode routes extracted output through compress/manifest/staging steps."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                with patch("redwood_dataagent.agent._mark_file_processed") as mock_mark_processed:
+                    with patch("redwood_dataagent.agent.log_compress") as mock_log_compress:
+                        with patch("redwood_dataagent.agent.log_manifest_created") as mock_log_manifest:
+                            from redwood_dataagent.query_adapter import QueryExecutionResult
+
+                            mock_client = MagicMock()
+                            mock_s3_class.return_value = mock_client
+
+                            def mock_download(bucket, key, dest):
+                                dest.write_text("id,name\n1,example\n")
+
+                            mock_client.download_file.side_effect = mock_download
+
+                            mock_execute.return_value = QueryExecutionResult(
+                                row_count=42,
+                                file_size_bytes=5120,
+                                execution_duration_seconds=1.23,
+                                output_file_path="s3://bucket/query_mode/outgoing/session-123/dot_contract_extract_v1_ce9b55325ce3_results.csv",
+                            )
+
+                            exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0
+        mock_execute.assert_called_once()
+        # Query file is downloaded once, then archive + manifest are staged.
+        assert mock_client.download_file.call_count == 1
+        assert mock_client.upload_file.call_count == 2
+        mock_log_compress.assert_called_once()
+        mock_log_manifest.assert_called_once()
+        manifest_details = mock_log_manifest.call_args.kwargs["details"]
+        assert manifest_details["manifest_path"].startswith(
+            "query_mode/transfers/session-123/"
+        )
+        staged_keys = [call.args[2] for call in mock_client.upload_file.call_args_list]
+        assert "query_mode/transfers/session-123/transfer.tar.gz" in staged_keys
+        assert "query_mode/transfers/session-123/manifest.json" in staged_keys
+        mock_mark_processed.assert_not_called()
 
     def test_sender_workflow_query_mode_adapter_failure_logs_failure(self) -> None:
         """Query mode handles adapter failures and logs error outcome."""
