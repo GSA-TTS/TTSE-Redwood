@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
 LOGGER = get_logger("redwood_dataagent")
 SUPPORTED_DB_ENGINES = ("postgres",)
+QUERY_RESULT_FINGERPRINT_LENGTH = 12
 
 
 @dataclass
@@ -91,6 +92,11 @@ def _build_query_fingerprint(contract: SenderQueryInputContract) -> str:
 def _build_query_processed_marker_key(template_id: str, fingerprint: str) -> str:
     """Build S3 object key for a successful query execution marker."""
     return f"query/processed/{template_id}/{fingerprint}.done"
+
+
+def _short_fingerprint(fingerprint: str, length: int = QUERY_RESULT_FINGERPRINT_LENGTH) -> str:
+    """Return a compact fingerprint prefix for output naming."""
+    return fingerprint[:length]
 
 
 def _query_already_processed(config: AgentConfig, marker_key: str) -> bool:
@@ -448,6 +454,7 @@ def _upload_results_to_s3(
     config: AgentConfig,
     template_id: str,
     transfer_session_id: str,
+    query_fingerprint: str,
 ) -> str:
     """Upload query results CSV to sender staging S3 bucket.
 
@@ -461,6 +468,8 @@ def _upload_results_to_s3(
         Query template ID for naming the output
     transfer_session_id : str
         Transfer session ID for organizing outputs
+    query_fingerprint : str
+        Stable fingerprint for short, collision-resistant output naming
 
     Returns
     -------
@@ -476,8 +485,9 @@ def _upload_results_to_s3(
         if S3Client is None:
             raise StorageError("S3 client is unavailable")
 
-        # Build S3 key: query/{transfer_session_id}/{template_id}_results.csv
-        s3_key = f"query/{transfer_session_id}/{template_id}_results.csv"
+        # Build S3 key: query/{transfer_session_id}/{template_id}_{fingerprint12}_results.csv
+        short_fingerprint = _short_fingerprint(query_fingerprint)
+        s3_key = f"query/{transfer_session_id}/{template_id}_{short_fingerprint}_results.csv"
 
         client = S3Client(aws_region=config.aws_region)
         client.upload_file(local_file, config.sender_staging_bucket, s3_key)
@@ -616,6 +626,7 @@ def execute_query(
             config,
             contract.template_id,
             config.transfer_session_id,
+            query_fingerprint,
         )
 
         marker_file = temp_work_dir / "query_processed.json"

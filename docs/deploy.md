@@ -138,7 +138,7 @@ Dependency/install note for future engines:
 
 - Set `SENDER_QUERY_INPUT_JSON` to a JSON payload with your query contract
 - Ensure the template ID in the contract is allow-listed in `src/redwood_dataagent/query_templates.py`
-- Query results are staged to S3 under `query/{transfer_session_id}/{template_id}_results.csv`
+- Query results are staged to S3 under `query/{transfer_session_id}/{template_id}_{fingerprint12}_results.csv`
 - Query mode writes a success marker after a completed run; repeated runs with the same query criteria and source DB context are skipped
 
 See the [README](../README.md) for detailed query mode architecture, contract structure, and examples.
