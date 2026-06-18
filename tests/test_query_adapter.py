@@ -168,7 +168,7 @@ class TestBuildIbisQuery:
             assert mock_table.filter.call_count == 2
 
     def test_build_ibis_query_with_order_by(self) -> None:
-        """Build query applies ordering."""
+        """Build query applies ordering with DESC direction."""
         contract = SenderQueryInputContract(
             template_id="dot_contract_extract_v1",
             params={
@@ -179,15 +179,55 @@ class TestBuildIbisQuery:
         )
 
         with patch("redwood_dataagent.query_adapter._get_ibis_connection") as mock_get_conn:
+            # Mock the entire ibis module with desc and asc functions
+            mock_ibis = MagicMock()
+            mock_desc_result = MagicMock()
+            mock_ibis.desc.return_value = mock_desc_result
+            
             mock_table = MagicMock()
             mock_connection = MagicMock()
             mock_connection.table.return_value = mock_table
             mock_table.order_by.return_value = mock_table
             mock_get_conn.return_value = mock_connection
 
-            ibis_table, _ = _build_ibis_query(contract)
+            with patch("redwood_dataagent.query_adapter.ibis", mock_ibis):
+                ibis_table, _ = _build_ibis_query(contract)
 
-            mock_table.order_by.assert_called_once()
+                # Verify ibis.desc() was called with the correct field
+                mock_ibis.desc.assert_called_once_with("award_date")
+                # Verify order_by was called with the result of ibis.desc()
+                mock_table.order_by.assert_called_once_with(mock_desc_result)
+
+    def test_build_ibis_query_with_order_by_asc(self) -> None:
+        """Build query applies ordering with ASC direction."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={
+                "schema": "dot",
+                "table": "contract_data",
+                "order_by": "vendor_name ASC",
+            },
+        )
+
+        with patch("redwood_dataagent.query_adapter._get_ibis_connection") as mock_get_conn:
+            # Mock the entire ibis module with desc and asc functions
+            mock_ibis = MagicMock()
+            mock_asc_result = MagicMock()
+            mock_ibis.asc.return_value = mock_asc_result
+            
+            mock_table = MagicMock()
+            mock_connection = MagicMock()
+            mock_connection.table.return_value = mock_table
+            mock_table.order_by.return_value = mock_table
+            mock_get_conn.return_value = mock_connection
+
+            with patch("redwood_dataagent.query_adapter.ibis", mock_ibis):
+                ibis_table, _ = _build_ibis_query(contract)
+
+                # Verify ibis.asc() was called with the correct field
+                mock_ibis.asc.assert_called_once_with("vendor_name")
+                # Verify order_by was called with the result of ibis.asc()
+                mock_table.order_by.assert_called_once_with(mock_asc_result)
 
     def test_build_ibis_query_falls_back_when_schema_kwarg_is_unsupported(self) -> None:
         """Backends without schema= support should fall back to database=."""

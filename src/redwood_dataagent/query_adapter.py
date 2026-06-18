@@ -339,8 +339,13 @@ def _apply_ordering(table: Any, order_by: Any) -> Any:
 
     parts = str(order_by).strip().split()
     field = parts[0]
-    direction = "desc" if len(parts) > 1 and parts[1].lower() == "desc" else "asc"
-    return table.order_by([(field, direction)])
+    is_desc = len(parts) > 1 and parts[1].lower() == "desc"
+
+    # Use ibis.desc() or ibis.asc() to create proper ordering expressions
+    if is_desc:
+        return table.order_by(ibis.desc(field))
+    else:
+        return table.order_by(ibis.asc(field))
 
 
 def _execute_query_with_timeout(
