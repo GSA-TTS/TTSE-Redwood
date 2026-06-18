@@ -368,7 +368,7 @@ class TestUploadResultsToS3:
                 "ce9b55325ce3708377997a21ae44be2b72e0de16aa5f7a9f4234e020f8a7ea07",
             )
 
-            assert "query/test-session-001" in s3_key
+            assert "query_mode/outgoing/test-session-001" in s3_key
             assert "dot_contract_extract_v1_ce9b55325ce3_results.csv" in s3_key
             mock_client.upload_file.assert_called_once()
 
@@ -445,6 +445,8 @@ class TestExecuteQuery:
         with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
              patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute, \
              patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload, \
+               patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
+               patch("redwood_dataagent.query_adapter._upload_query_processed_marker"), \
              patch("redwood_dataagent.query_adapter.signal"):
 
             mock_table = MagicMock()
@@ -455,7 +457,7 @@ class TestExecuteQuery:
                 {"contract_id": "2", "vendor_name": "Beta Inc"},
             ]
             mock_execute.return_value = rows
-            mock_upload.return_value = "query/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
+            mock_upload.return_value = "query_mode/outgoing/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
 
             result = execute_query(contract, config)
 
@@ -586,7 +588,7 @@ class TestExecuteQuery:
 
         assert result.skipped is False
         assert result.row_count == 1
-        assert result.marker_key.startswith("query/processed/dot_contract_extract_v1/")
+        assert result.marker_key.startswith("query_mode/processed/dot_contract_extract_v1/")
         assert mock_client.object_exists.call_count == 1
         assert mock_client.upload_file.call_count == 2
 

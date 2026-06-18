@@ -14,6 +14,7 @@ import json
 import shutil
 import tarfile
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -65,6 +66,8 @@ DEFAULT_MANIFEST_FILE_NAME = "manifest.json"
 DEFAULT_RETRY_ATTEMPTS = 3
 DONE_MARKER_SUFFIX = ".done"
 VALID_SENDER_INPUT_MODES = {"file", "query"}
+QUERY_MODE_TRANSFERS_PREFIX = "query_mode/transfers"
+QUERY_SKIP_REASON_MATCHING_MARKER = "matching query success marker already exists"
 
 T = TypeVar("T")
 
@@ -76,6 +79,24 @@ class SenderQueryInputContract(BaseModel):
     params: dict[str, Any]
     row_limit: int = Field(default=10_000, ge=1)
     timeout_seconds: int = Field(default=60, ge=1)
+
+
+@dataclass
+class SenderInputPreparation:
+    """Mode-specific sender input prepared for shared transfer steps."""
+
+    staged_file: Path
+    file_name: str
+    extract_details: dict[str, Any]
+    pipeline_complete_details: dict[str, Any] | None = None
+
+
+@dataclass
+class SenderTransferArtifacts:
+    """Artifacts and metadata emitted by shared sender transfer steps."""
+
+    manifest: TransferManifest
+    staged_artifact_keys: list[str]
 
 
 def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
@@ -312,7 +333,7 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
                 details={
                     "step": "query_execution_skipped",
                     "template_id": contract.template_id,
-                    "reason": "matching query success marker already exists",
+                    "reason": QUERY_SKIP_REASON_MATCHING_MARKER,
                     "fingerprint": result.query_fingerprint,
                     "marker_key": result.marker_key,
                 },
@@ -325,7 +346,7 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
                 details={
                     "template_id": contract.template_id,
                     "skipped": True,
-                    "reason": "matching query success marker already exists",
+                    "reason": QUERY_SKIP_REASON_MATCHING_MARKER,
                     "fingerprint": result.query_fingerprint,
                     "marker_key": result.marker_key,
                 },
@@ -871,6 +892,539 @@ def _safe_archive_member_name(file_name: str) -> str:
     return file_name
 
 
+def _build_sender_transfer_key(selected_mode: str, transfer_session_id: str, file_name: str) -> str:
+    """Build sender staging transfer key based on input mode."""
+    if selected_mode == "query":
+        return f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id}/{file_name}"
+
+    return SenderStoragePath.transfers(transfer_session_id, file_name)
+
+
+def _select_file_mode_source(config: AgentConfig) -> tuple[str, str] | None:
+    """Return (s3_path, file_name) for file mode, or None when no work exists."""
+    if not config.sender_data_directory:
+        LOGGER.warning(
+            prefix_log_message(
+                "Sender data directory not configured. "
+                "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/outgoing/)",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            )
+        )
+        return None
+
+    LOGGER.info(
+        prefix_log_message(
+            "Scanning sender directory for new files",
+            agent_mode=config.agent_mode,
+            transfer_session_id=config.transfer_session_id,
+        ),
+        extra={"event": "sender_scan_start", "directory": config.sender_data_directory},
+    )
+    files_to_process = _retry_operation(
+        "detect_files",
+        lambda: _scan_sender_directory(config.sender_data_directory, config.aws_region),
+    )
+
+    if not files_to_process:
+        LOGGER.info(
+            prefix_log_message(
+                "No new file read. Exiting sender workflow (idempotent).",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={"event": "sender_no_files", "directory": config.sender_data_directory},
+        )
+        return None
+
+    LOGGER.info(
+        prefix_log_message(
+            f"Found {len(files_to_process)} file(s) to process in sender directory",
+            agent_mode=config.agent_mode,
+            transfer_session_id=config.transfer_session_id,
+        ),
+        extra={"event": "sender_files_found", "file_count": len(files_to_process)},
+    )
+
+    s3_path, file_name = files_to_process[0]
+    LOGGER.info(
+        prefix_log_message(
+            f"Processing file: {file_name}",
+            agent_mode=config.agent_mode,
+            transfer_session_id=config.transfer_session_id,
+        ),
+        extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
+    )
+    return s3_path, file_name
+
+
+def _prepare_query_mode_input(config: AgentConfig, tmpdir_path: Path) -> SenderInputPreparation | None:
+    """Validate, execute, and stage query-mode source input.
+
+    Returns None when query mode should exit early (validation failure, execution
+    failure, or idempotent skip) after logging the appropriate audit events.
+    """
+    try:
+        contract = _validate_sender_query_input_contract(
+            config.sender_query_input_json,
+            max_query_row_limit=config.max_query_row_limit,
+            max_query_timeout_seconds=config.max_query_timeout_seconds,
+        )
+    except ConfigurationError as exc:
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_contract_validation",
+                "error": str(exc),
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": str(exc)},
+        )
+        return None
+
+    try:
+        query_result = execute_query(contract, config)
+    except ConfigurationError as exc:
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_execution",
+                "error": str(exc),
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": str(exc)},
+        )
+        return None
+    except StorageError as exc:
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_execution",
+                "error": str(exc),
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": str(exc)},
+        )
+        return None
+    except Exception as exc:
+        error_message = f"Unexpected error during query execution: {exc}"
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_execution",
+                "error": error_message,
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": error_message},
+        )
+        return None
+
+    if query_result.skipped:
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.SUCCESS,
+            details={
+                "step": "query_execution_skipped",
+                "template_id": contract.template_id,
+                "reason": QUERY_SKIP_REASON_MATCHING_MARKER,
+                "fingerprint": query_result.query_fingerprint,
+                "marker_key": query_result.marker_key,
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.SUCCESS,
+            details={
+                "template_id": contract.template_id,
+                "skipped": True,
+                "reason": QUERY_SKIP_REASON_MATCHING_MARKER,
+                "fingerprint": query_result.query_fingerprint,
+                "marker_key": query_result.marker_key,
+            },
+        )
+        return None
+
+    try:
+        parsed_output = _parse_s3_path(query_result.output_file_path)
+        if parsed_output is None:
+            raise StorageError(
+                "Query output path must be an S3 URL, got: "
+                f"{query_result.output_file_path}"
+            )
+
+        _bucket, output_key = parsed_output
+        file_name = Path(output_key).name
+        staged_file = tmpdir_path / file_name
+        _retry_operation(
+            "download_query_result",
+            lambda: _download_from_s3(
+                query_result.output_file_path,
+                staged_file,
+                config.aws_region,
+            ),
+        )
+
+        extract_details = {
+            "data_source": "query_execution",
+            "template_id": contract.template_id,
+            "query_output_path": query_result.output_file_path,
+            "query_fingerprint": query_result.query_fingerprint,
+            "file_name": file_name,
+            "row_count": query_result.row_count,
+            "file_size_bytes": query_result.file_size_bytes,
+            "staged_file_size_bytes": staged_file.stat().st_size,
+            "duration_seconds": round(query_result.execution_duration_seconds, 2),
+        }
+        pipeline_complete_details = {
+            "template_id": contract.template_id,
+            "row_count": query_result.row_count,
+            "file_size_bytes": query_result.file_size_bytes,
+            "duration_seconds": round(query_result.execution_duration_seconds, 2),
+        }
+        return SenderInputPreparation(
+            staged_file=staged_file,
+            file_name=file_name,
+            extract_details=extract_details,
+            pipeline_complete_details=pipeline_complete_details,
+        )
+    except Exception as e:
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "query_result_download",
+                "selected_path": query_result.output_file_path,
+                "error": f"Failed to download query output: {e}",
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": f"Failed to download query output: {e}"},
+        )
+        return None
+
+
+def _prepare_file_mode_input(
+    config: AgentConfig,
+    tmpdir_path: Path,
+    s3_path: str,
+    file_name: str,
+) -> SenderInputPreparation:
+    """Download file-mode source input from S3 into local staging."""
+    try:
+        bucket, key = _parse_s3_path(s3_path)
+        client = S3Client(aws_region=config.aws_region)
+        staged_file = tmpdir_path / file_name
+        _retry_operation(
+            "download_sender_file",
+            lambda: client.download_file(bucket, key, staged_file),
+        )
+
+        extract_details = {
+            "data_source": "s3_object",
+            "s3_path": s3_path,
+            "file_name": file_name,
+            "file_size_bytes": staged_file.stat().st_size,
+        }
+        return SenderInputPreparation(
+            staged_file=staged_file,
+            file_name=file_name,
+            extract_details=extract_details,
+        )
+    except Exception as e:
+        log_extract_data(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={
+                "step": "detect",
+                "selected_path": s3_path,
+                "error": f"Failed to download file: {e}",
+            },
+        )
+        log_pipeline_complete(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"error": f"Failed to download file: {e}"},
+        )
+        raise StorageError(f"Failed to download {s3_path}: {e}") from e
+
+
+def _run_sender_transfer_pipeline(
+    config: AgentConfig,
+    selected_mode: str,
+    staged_file: Path,
+    file_name: str,
+    tmpdir_path: Path,
+) -> SenderTransferArtifacts | None:
+    """Run shared sender transfer steps after source input is prepared."""
+    approver = PolicyApprover()
+    is_approved = approver.approve_transfer(
+        config.sender_agency,
+        1,
+    )
+
+    if not is_approved:
+        log_policy_check(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"reason": "Policy approval denied", "file_count": 1},
+        )
+        return None
+
+    log_policy_check(
+        transfer_session_id=config.transfer_session_id,
+        sender_agency=config.sender_agency,
+        receiver_agency=config.receiver_agency,
+        outcome=EventOutcome.SUCCESS,
+        details={"file_count": 1},
+    )
+
+    archive_path = tmpdir_path / DEFAULT_ARCHIVE_FILE_NAME
+    archive_member_name = _safe_archive_member_name(staged_file.name)
+    try:
+        _retry_operation(
+            "compress_sender_data",
+            lambda: _compress_sender_data(archive_path, staged_file, archive_member_name),
+        )
+    except Exception as e:
+        log_compress(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"step": "compress", "source_file_name": staged_file.name, "error": str(e)},
+        )
+        raise
+
+    log_compress(
+        transfer_session_id=config.transfer_session_id,
+        sender_agency=config.sender_agency,
+        receiver_agency=config.receiver_agency,
+        outcome=EventOutcome.SUCCESS,
+        details={
+            "compression_type": DEFAULT_COMPRESSION.value,
+            "source_file_name": staged_file.name,
+            "source_size_bytes": staged_file.stat().st_size,
+            "compressed_size_bytes": archive_path.stat().st_size,
+        },
+    )
+
+    manifest_files = [
+        ManifestFile(
+            file_name=file_name,
+            file_size_bytes=staged_file.stat().st_size,
+            checksum_sha256=_compute_checksum(staged_file, DEFAULT_CHECKSUM_ALGORITHM),
+        ),
+        ManifestFile(
+            file_name=archive_path.name,
+            file_size_bytes=archive_path.stat().st_size,
+            checksum_sha256=_compute_checksum(archive_path, DEFAULT_CHECKSUM_ALGORITHM),
+        ),
+    ]
+
+    manifest = TransferManifest(
+        transfer_session_id=config.transfer_session_id,
+        sender_agency=config.sender_agency,
+        receiver_agency=config.receiver_agency,
+        compression_type=DEFAULT_COMPRESSION,
+        total_file_count=len(manifest_files),
+        files=manifest_files,
+    )
+
+    manifest_path = tmpdir_path / DEFAULT_MANIFEST_FILE_NAME
+    try:
+        _retry_operation(
+            "write_manifest",
+            lambda: _write_sender_manifest_output(manifest, manifest_path),
+        )
+    except Exception as e:
+        log_manifest_created(
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            outcome=EventOutcome.FAILURE,
+            details={"step": "manifest", "error": str(e)},
+        )
+        raise
+
+    log_manifest_created(
+        transfer_session_id=config.transfer_session_id,
+        sender_agency=config.sender_agency,
+        receiver_agency=config.receiver_agency,
+        outcome=EventOutcome.SUCCESS,
+        details={
+            "manifest_path": _build_sender_transfer_key(
+                selected_mode,
+                config.transfer_session_id,
+                manifest_path.name,
+            ),
+            "payload_file_count": manifest.total_file_count,
+            "archive_name": archive_path.name,
+        },
+    )
+
+    staging_client = S3Client(aws_region=config.aws_region)
+    total_staged_bytes = 0
+    staged_artifacts: list[tuple[Path, str]] = []
+    staged_artifact_keys: list[str] = []
+    for artifact_path in (archive_path, manifest_path):
+        staging_key = _build_sender_transfer_key(
+            selected_mode,
+            config.transfer_session_id,
+            artifact_path.name,
+        )
+        _retry_operation(
+            "stage_upload",
+            lambda artifact_path=artifact_path, staging_key=staging_key: staging_client.upload_file(
+                artifact_path, config.sender_staging_bucket, staging_key
+            ),
+        )
+
+        total_staged_bytes += artifact_path.stat().st_size
+        staged_artifacts.append((artifact_path, staging_key))
+        staged_artifact_keys.append(staging_key)
+        LOGGER.info(
+            prefix_log_message(
+                f"Staged artifact to S3: {artifact_path.name}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_artifact_staged",
+                "bucket": config.sender_staging_bucket,
+                "key": staging_key,
+            },
+        )
+
+    sftp_client = create_sftp_client_from_secrets_manager(
+        sftp_endpoints=config.sftp_endpoints,
+        secrets_manager_name=config.sftp_secrets_manager_name,
+        aws_region=config.aws_region,
+    )
+    primary_sftp_endpoint = config.sftp_endpoints[0]
+    total_sftp_uploaded_bytes = 0
+    log_sftp_transfer_start(
+        transfer_session_id=config.transfer_session_id,
+        sender_agency=config.sender_agency,
+        receiver_agency=config.receiver_agency,
+        destination_host=primary_sftp_endpoint,
+        details={
+            "step": "sftp_upload",
+            "artifact_count": len(staged_artifacts),
+            "endpoints": config.sftp_endpoints,
+        },
+    )
+
+    for artifact_path, _staging_key in staged_artifacts:
+        remote_path = f"/{config.sender_agency}/{config.transfer_session_id}/{artifact_path.name}"
+        try:
+            upload_metadata = _retry_operation(
+                "sftp_upload",
+                lambda artifact_path=artifact_path, remote_path=remote_path: sftp_client.upload_file(artifact_path, remote_path),
+            )
+        except Exception as e:
+            log_sftp_transfer_complete(
+                transfer_session_id=config.transfer_session_id,
+                sender_agency=config.sender_agency,
+                receiver_agency=config.receiver_agency,
+                destination_host=primary_sftp_endpoint,
+                bytes_transferred=total_sftp_uploaded_bytes,
+                outcome=EventOutcome.FAILURE,
+                details={
+                    "step": "sftp_upload",
+                    "remote_path": remote_path,
+                    "error": str(e),
+                },
+            )
+            raise
+
+        total_sftp_uploaded_bytes += int(upload_metadata.get("file_size_bytes", 0))
+        LOGGER.info(
+            prefix_log_message(
+                f"Uploaded artifact to SFTP: {artifact_path.name}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_artifact_uploaded_sftp",
+                "remote_path": remote_path,
+                "endpoint": upload_metadata.get("endpoint", primary_sftp_endpoint),
+            },
+        )
+
+    log_sftp_transfer_complete(
+        transfer_session_id=config.transfer_session_id,
+        sender_agency=config.sender_agency,
+        receiver_agency=config.receiver_agency,
+        destination_host=primary_sftp_endpoint,
+        outcome=EventOutcome.SUCCESS,
+        bytes_transferred=total_sftp_uploaded_bytes,
+        details={
+            "step": "sftp_upload",
+            "artifact_count": len(staged_artifacts),
+            "remote_prefix": f"/{config.sender_agency}/{config.transfer_session_id}/",
+            "staging_prefix": (
+                f"{QUERY_MODE_TRANSFERS_PREFIX}/{config.transfer_session_id}/"
+                if selected_mode == "query"
+                else f"transfers/{config.transfer_session_id}/"
+            ),
+            "staged_bytes": total_staged_bytes,
+        },
+    )
+
+    return SenderTransferArtifacts(
+        manifest=manifest,
+        staged_artifact_keys=staged_artifact_keys,
+    )
+
+
 def _create_sender_workflow(config: AgentConfig) -> int:
     """Execute sender-side transfer workflow.
 
@@ -906,66 +1460,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             },
         )
 
-        if selected_mode == "query":
-            _create_sender_query_workflow(config)
-            return 0
-
-        if not config.sender_data_directory:
-            LOGGER.warning(
-                prefix_log_message(
-                    "Sender data directory not configured. "
-                    "Set SENDER_DATA_DIRECTORY to a valid S3 directory path (e.g., s3://bucket/outgoing/)",
-                    agent_mode=config.agent_mode,
-                    transfer_session_id=config.transfer_session_id,
-                )
-            )
-            return 0
-
-        # Scan directory for new files
-        LOGGER.info(
-            prefix_log_message(
-                "Scanning sender directory for new files",
-                agent_mode=config.agent_mode,
-                transfer_session_id=config.transfer_session_id,
-            ),
-            extra={"event": "sender_scan_start", "directory": config.sender_data_directory},
-        )
-        files_to_process = _retry_operation(
-            "detect_files",
-            lambda: _scan_sender_directory(config.sender_data_directory, config.aws_region),
-        )
-
-        if not files_to_process:
-            LOGGER.info(
-                prefix_log_message(
-                    "No new file read. Exiting sender workflow (idempotent).",
-                    agent_mode=config.agent_mode,
-                    transfer_session_id=config.transfer_session_id,
-                ),
-                extra={"event": "sender_no_files", "directory": config.sender_data_directory},
-            )
-            return 0
-
-        LOGGER.info(
-            prefix_log_message(
-                f"Found {len(files_to_process)} file(s) to process in sender directory",
-                agent_mode=config.agent_mode,
-                transfer_session_id=config.transfer_session_id,
-            ),
-            extra={"event": "sender_files_found", "file_count": len(files_to_process)},
-        )
-
-        # Process the first file (Day 1 MVP processes one at a time)
-        s3_path, file_name = files_to_process[0]
-        
-        LOGGER.info(
-            prefix_log_message(
-                f"Processing file: {file_name}",
-                agent_mode=config.agent_mode,
-                transfer_session_id=config.transfer_session_id,
-            ),
-            extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
-        )
+        file_mode_source: tuple[str, str] | None = None
+        if selected_mode != "query":
+            file_mode_source = _select_file_mode_source(config)
+            if file_mode_source is None:
+                return 0
 
         # 1. Log pipeline start
         log_pipeline_start(
@@ -973,46 +1472,31 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             sender_agency=config.sender_agency,
             receiver_agency=config.receiver_agency,
         )
+        pipeline_complete_details: dict[str, Any] | None = None
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-
-            # Download the file from S3
-            try:
-                bucket, key = _parse_s3_path(s3_path)
-                client = S3Client(aws_region=config.aws_region)
-                staged_file = tmpdir_path / file_name
-                _retry_operation(
-                    "download_sender_file",
-                    lambda: client.download_file(bucket, key, staged_file),
+            prepared_input: SenderInputPreparation | None = None
+            if selected_mode == "query":
+                prepared_input = _prepare_query_mode_input(config, tmpdir_path)
+            else:
+                if file_mode_source is None:
+                    raise StorageError("File mode source selection was not initialized")
+                s3_path, file_name = file_mode_source
+                prepared_input = _prepare_file_mode_input(
+                    config,
+                    tmpdir_path,
+                    s3_path,
+                    file_name,
                 )
 
-                extract_details = {
-                    "data_source": "s3_object",
-                    "s3_path": s3_path,
-                    "file_name": file_name,
-                    "file_size_bytes": staged_file.stat().st_size,
-                }
-            except Exception as e:
-                log_extract_data(
-                    transfer_session_id=config.transfer_session_id,
-                    sender_agency=config.sender_agency,
-                    receiver_agency=config.receiver_agency,
-                    outcome=EventOutcome.FAILURE,
-                    details={
-                        "step": "detect",
-                        "selected_path": s3_path,
-                        "error": f"Failed to download file: {e}",
-                    },
-                )
-                log_pipeline_complete(
-                    transfer_session_id=config.transfer_session_id,
-                    sender_agency=config.sender_agency,
-                    receiver_agency=config.receiver_agency,
-                    outcome=EventOutcome.FAILURE,
-                    details={"error": f"Failed to download file: {e}"},
-                )
-                raise StorageError(f"Failed to download {s3_path}: {e}") from e
+            if prepared_input is None:
+                return 0
+
+            pipeline_complete_details = prepared_input.pipeline_complete_details
+            staged_file = prepared_input.staged_file
+            file_name = prepared_input.file_name
+            extract_details = prepared_input.extract_details
 
             LOGGER.info(
                 prefix_log_message(
@@ -1035,237 +1519,34 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 details=extract_details,
             )
 
-            # 2. Policy approval check
-            approver = PolicyApprover()
-            is_approved = approver.approve_transfer(
-                config.sender_agency,
-                1,
+            transfer_artifacts = _run_sender_transfer_pipeline(
+                config=config,
+                selected_mode=selected_mode,
+                staged_file=staged_file,
+                file_name=file_name,
+                tmpdir_path=tmpdir_path,
             )
-
-            if not is_approved:
-                log_policy_check(
-                    transfer_session_id=config.transfer_session_id,
-                    sender_agency=config.sender_agency,
-                    receiver_agency=config.receiver_agency,
-                    outcome=EventOutcome.FAILURE,
-                    details={"reason": "Policy approval denied", "file_count": 1},
-                )
+            if transfer_artifacts is None:
                 return 1
 
-            log_policy_check(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                outcome=EventOutcome.SUCCESS,
-                details={"file_count": 1},
-            )
-
-            # 3. Compress data
-            archive_path = tmpdir_path / DEFAULT_ARCHIVE_FILE_NAME
-            archive_member_name = _safe_archive_member_name(staged_file.name)
-            try:
+            # 6. Mark file as processed for file mode inputs.
+            if selected_mode != "query":
                 _retry_operation(
-                    "compress_sender_data",
-                    lambda: _compress_sender_data(archive_path, staged_file, archive_member_name),
+                    "mark_file_processed",
+                    lambda: _mark_file_processed(file_name, config.sender_data_directory, config.aws_region),
                 )
-            except Exception as e:
-                log_compress(
-                    transfer_session_id=config.transfer_session_id,
-                    sender_agency=config.sender_agency,
-                    receiver_agency=config.receiver_agency,
-                    outcome=EventOutcome.FAILURE,
-                    details={"step": "compress", "source_file_name": staged_file.name, "error": str(e)},
-                )
-                raise
-
-            log_compress(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                outcome=EventOutcome.SUCCESS,
-                details={
-                    "compression_type": DEFAULT_COMPRESSION.value,
-                    "source_file_name": staged_file.name,
-                    "source_size_bytes": staged_file.stat().st_size,
-                    "compressed_size_bytes": archive_path.stat().st_size,
-                },
-            )
-
-            # Include both source file(s) and the archive in manifest
-            manifest_files = [
-                ManifestFile(
-                    file_name=file_name,  # Original source file
-                    file_size_bytes=staged_file.stat().st_size,
-                    checksum_sha256=_compute_checksum(staged_file, DEFAULT_CHECKSUM_ALGORITHM),
-                ),
-                ManifestFile(
-                    file_name=archive_path.name,  # Compressed archive
-                    file_size_bytes=archive_path.stat().st_size,
-                    checksum_sha256=_compute_checksum(archive_path, DEFAULT_CHECKSUM_ALGORITHM),
-                ),
-            ]
-
-            manifest = TransferManifest(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                compression_type=DEFAULT_COMPRESSION,
-                total_file_count=len(manifest_files),
-                files=manifest_files,
-            )
-
-            manifest_path = tmpdir_path / DEFAULT_MANIFEST_FILE_NAME
-            try:
-                _retry_operation(
-                    "write_manifest",
-                    lambda: _write_sender_manifest_output(manifest, manifest_path),
-                )
-            except Exception as e:
-                log_manifest_created(
-                    transfer_session_id=config.transfer_session_id,
-                    sender_agency=config.sender_agency,
-                    receiver_agency=config.receiver_agency,
-                    outcome=EventOutcome.FAILURE,
-                    details={"step": "manifest", "error": str(e)},
-                )
-                raise
-
-            log_manifest_created(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                outcome=EventOutcome.SUCCESS,
-                details={
-                    "manifest_path": SenderStoragePath.transfers(
-                        config.transfer_session_id,
-                        manifest_path.name,
-                    ),
-                    "payload_file_count": manifest.total_file_count,
-                    "archive_name": archive_path.name,
-                },
-            )
-
-            # 4. Upload artifacts to sender staging bucket
-            staging_client = S3Client(aws_region=config.aws_region)
-            total_staged_bytes = 0
-            staged_artifacts: list[tuple[Path, str]] = []
-            for artifact_path in (archive_path, manifest_path):
-                staging_key = SenderStoragePath.transfers(
-                    config.transfer_session_id,
-                    artifact_path.name,
-                )
-                _retry_operation(
-                    "stage_upload",
-                    lambda artifact_path=artifact_path, staging_key=staging_key: staging_client.upload_file(
-                        artifact_path, config.sender_staging_bucket, staging_key
-                    ),
-                )
-
-                total_staged_bytes += artifact_path.stat().st_size
-                staged_artifacts.append((artifact_path, staging_key))
                 LOGGER.info(
                     prefix_log_message(
-                        f"Staged artifact to S3: {artifact_path.name}",
+                        f"File marked as processed and moved to processed folder: {file_name}",
                         agent_mode=config.agent_mode,
                         transfer_session_id=config.transfer_session_id,
                     ),
                     extra={
-                        "event": "sender_artifact_staged",
-                        "bucket": config.sender_staging_bucket,
-                        "key": staging_key,
+                        "event": "sender_file_marked",
+                        "file_name": file_name,
+                        "marker_location": f"{config.sender_data_directory}../processed/{file_name}{DONE_MARKER_SUFFIX}",
                     },
                 )
-
-            # 5. Upload staged artifacts to receiver SFTP endpoints
-            sftp_client = create_sftp_client_from_secrets_manager(
-                sftp_endpoints=config.sftp_endpoints,
-                secrets_manager_name=config.sftp_secrets_manager_name,
-                aws_region=config.aws_region,
-            )
-            primary_sftp_endpoint = config.sftp_endpoints[0]
-            total_sftp_uploaded_bytes = 0
-            log_sftp_transfer_start(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                destination_host=primary_sftp_endpoint,
-                details={
-                    "step": "sftp_upload",
-                    "artifact_count": len(staged_artifacts),
-                    "endpoints": config.sftp_endpoints,
-                },
-            )
-
-            for artifact_path, _staging_key in staged_artifacts:
-                remote_path = f"/{config.sender_agency}/{config.transfer_session_id}/{artifact_path.name}"
-                try:
-                    upload_metadata = _retry_operation(
-                        "sftp_upload",
-                        lambda artifact_path=artifact_path, remote_path=remote_path: sftp_client.upload_file(artifact_path, remote_path),
-                    )
-                except Exception as e:
-                    log_sftp_transfer_complete(
-                        transfer_session_id=config.transfer_session_id,
-                        sender_agency=config.sender_agency,
-                        receiver_agency=config.receiver_agency,
-                        destination_host=primary_sftp_endpoint,
-                        bytes_transferred=total_sftp_uploaded_bytes,
-                        outcome=EventOutcome.FAILURE,
-                        details={
-                            "step": "sftp_upload",
-                            "remote_path": remote_path,
-                            "error": str(e),
-                        },
-                    )
-                    raise
-
-                total_sftp_uploaded_bytes += int(upload_metadata.get("file_size_bytes", 0))
-                LOGGER.info(
-                    prefix_log_message(
-                        f"Uploaded artifact to SFTP: {artifact_path.name}",
-                        agent_mode=config.agent_mode,
-                        transfer_session_id=config.transfer_session_id,
-                    ),
-                    extra={
-                        "event": "sender_artifact_uploaded_sftp",
-                        "remote_path": remote_path,
-                        "endpoint": upload_metadata.get("endpoint", primary_sftp_endpoint),
-                    },
-                )
-
-            log_sftp_transfer_complete(
-                transfer_session_id=config.transfer_session_id,
-                sender_agency=config.sender_agency,
-                receiver_agency=config.receiver_agency,
-                destination_host=primary_sftp_endpoint,
-                outcome=EventOutcome.SUCCESS,
-                bytes_transferred=total_sftp_uploaded_bytes,
-                details={
-                    "step": "sftp_upload",
-                    "artifact_count": len(staged_artifacts),
-                    "remote_prefix": f"/{config.sender_agency}/{config.transfer_session_id}/",
-                    "staging_prefix": f"transfers/{config.transfer_session_id}/",
-                    "staged_bytes": total_staged_bytes,
-                },
-            )
-
-            # 6. Mark file as processed
-            _retry_operation(
-                "mark_file_processed",
-                lambda: _mark_file_processed(file_name, config.sender_data_directory, config.aws_region),
-            )
-            LOGGER.info(
-                prefix_log_message(
-                    f"File marked as processed and moved to processed folder: {file_name}",
-                    agent_mode=config.agent_mode,
-                    transfer_session_id=config.transfer_session_id,
-                ),
-                extra={
-                    "event": "sender_file_marked",
-                    "file_name": file_name,
-                    "marker_location": f"{config.sender_data_directory}../processed/{file_name}{DONE_MARKER_SUFFIX}",
-                },
-            )
 
             LOGGER.info(
                 prefix_log_message(
@@ -1276,17 +1557,8 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                 extra={
                     "event": "sender_complete",
                     "session_id": config.transfer_session_id,
-                    "manifest": manifest.model_dump(),
-                    "staged_artifacts": [
-                        SenderStoragePath.transfers(
-                            config.transfer_session_id,
-                            archive_path.name,
-                        ),
-                        SenderStoragePath.transfers(
-                            config.transfer_session_id,
-                            manifest_path.name,
-                        ),
-                    ],
+                    "manifest": transfer_artifacts.manifest.model_dump(),
+                    "staged_artifacts": transfer_artifacts.staged_artifact_keys,
                 },
             )
 
@@ -1296,6 +1568,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             sender_agency=config.sender_agency,
             receiver_agency=config.receiver_agency,
             outcome=EventOutcome.SUCCESS,
+            details=pipeline_complete_details,
         )
 
         return 0
