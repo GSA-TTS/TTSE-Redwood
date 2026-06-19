@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from .exceptions import ConfigurationError
 from .storage.conventions import (
-    SenderStoragePath,
+    FileModeStoragePath,
     StoragePurpose,
     build_receiver_bucket,
     build_sender_bucket,
@@ -195,7 +195,7 @@ def load_config() -> AgentConfig:
             sender_agency, environment, StoragePurpose.STAGING
         )
         sender_data_directory = (
-            f"s3://{sender_staging_bucket}/{SenderStoragePath.scan_prefix()}"
+            f"s3://{sender_staging_bucket}/{FileModeStoragePath.scan_prefix()}"
         )
         receiver_landing_bucket = ""
         receiver_target_bucket = ""
