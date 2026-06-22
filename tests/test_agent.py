@@ -620,6 +620,11 @@ class TestSenderWorkflow:
                                         mock_manifest.assert_called_once()
                                         mock_stage_start.assert_called_once()
                                         mock_stage_complete.assert_called_once()
+                                        staged_keys = [
+                                            call.args[2] for call in mock_client.upload_file.call_args_list
+                                        ]
+                                        assert "file_mode/transfers/session-123/transfer.tar.gz" in staged_keys
+                                        assert "file_mode/transfers/session-123/manifest.json" in staged_keys
 
     def test_sender_workflow_upload_failure_logs_failure_and_returns_error(self, tmp_path: Path) -> None:
         """Sender workflow exits non-zero when staging upload fails before SFTP transfer."""

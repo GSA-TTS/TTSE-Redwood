@@ -13,8 +13,9 @@ Day 1 Storage Capabilities:
 
 Example usage:
     from redwood_dataagent.storage import (
+        FileModeStoragePath,
+        QueryModeStoragePath,
         StoragePurpose,
-        SenderStoragePath,
         ReceiverStoragePath,
         build_sender_bucket,
         build_receiver_bucket,
@@ -36,17 +37,23 @@ Example usage:
     # Result: "tts-core-dev-gsa-data-landing"
     
     # Build transfer paths with manifest
-    transfer_path = SenderStoragePath.transfers(
+    transfer_path = FileModeStoragePath.transfers(
         transfer_session_id="transfer-001",
         file_name="data.tar.gz",
     )
-    # Result: "transfers/transfer-001/data.tar.gz"
+    # Result: "file_mode/transfers/transfer-001/data.tar.gz"
     
-    manifest_path = SenderStoragePath.transfers(
+    manifest_path = FileModeStoragePath.transfers(
         transfer_session_id="transfer-001",
         file_name="manifest.json",
     )
-    # Result: "transfers/transfer-001/manifest.json"
+    # Result: "file_mode/transfers/transfer-001/manifest.json"
+
+    query_result_path = QueryModeStoragePath.transfers(
+        transfer_session_id="transfer-002",
+        file_name="results.csv",
+    )
+    # Result: "query_mode/transfers/transfer-002/results.csv"
     
     # Build extraction paths on receiver
     extracted_path = ReceiverStoragePath.extracted(
@@ -57,8 +64,9 @@ Example usage:
 """
 
 from redwood_dataagent.storage.conventions import (
+    FileModeStoragePath,
+    QueryModeStoragePath,
     ReceiverStoragePath,
-    SenderStoragePath,
     StoragePurpose,
     build_receiver_bucket,
     build_sender_bucket,
@@ -66,7 +74,8 @@ from redwood_dataagent.storage.conventions import (
 
 __all__ = [
     "StoragePurpose",
-    "SenderStoragePath",
+    "FileModeStoragePath",
+    "QueryModeStoragePath",
     "ReceiverStoragePath",
     "build_sender_bucket",
     "build_receiver_bucket",

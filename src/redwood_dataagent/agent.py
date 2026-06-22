@@ -52,7 +52,7 @@ from .query_templates import ALLOWLISTED_QUERY_TEMPLATES
 from .receiver.landing import ReceiverLandingZone
 from .receiver.store import ReceiverTargetStore
 from .sftp import create_sftp_client_from_secrets_manager
-from .storage.conventions import SenderStoragePath
+from .storage.conventions import FileModeStoragePath, QueryModeStoragePath
 
 # Create module logger (will auto-inject transfer_session_id from context)
 LOGGER = get_logger("redwood_dataagent")
@@ -66,7 +66,6 @@ DEFAULT_MANIFEST_FILE_NAME = "manifest.json"
 DEFAULT_RETRY_ATTEMPTS = 3
 DONE_MARKER_SUFFIX = ".done"
 VALID_SENDER_INPUT_MODES = {"file", "query"}
-QUERY_MODE_TRANSFERS_PREFIX = "query_mode/transfers"
 QUERY_SKIP_REASON_MATCHING_MARKER = "matching query success marker already exists"
 
 T = TypeVar("T")
@@ -125,16 +124,20 @@ def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: 
     ) from last_error
 
 
-def _build_processed_marker_key(key: str) -> str:
-    """Build marker object key for a processed sender scan file."""
-    sender_scan_prefix = SenderStoragePath.scan_prefix()
+# Sender file-mode helpers
+
+
+def _build_file_mode_processed_marker_key(key: str) -> str:
+    """Build the file-mode .done marker key for a scanned sender object."""
+    sender_scan_prefix = FileModeStoragePath.scan_prefix()
+    processed_prefix = FileModeStoragePath.processed_prefix()
     if key.startswith(sender_scan_prefix):
-        return key.replace(sender_scan_prefix, "processed/", 1) + DONE_MARKER_SUFFIX
+        return key.replace(sender_scan_prefix, processed_prefix, 1) + DONE_MARKER_SUFFIX
 
     if f"/{sender_scan_prefix}" in key:
-        return key.replace(f"/{sender_scan_prefix}", "/processed/", 1) + DONE_MARKER_SUFFIX
+        return key.replace(f"/{sender_scan_prefix}", f"/{processed_prefix}", 1) + DONE_MARKER_SUFFIX
 
-    return f"processed/{Path(key).name}{DONE_MARKER_SUFFIX}"
+    return f"{processed_prefix}{Path(key).name}{DONE_MARKER_SUFFIX}"
 
 
 def _extract_data(config: AgentConfig) -> None:
@@ -144,6 +147,9 @@ def _extract_data(config: AgentConfig) -> None:
     Phase 2 can implement agency-side extraction logic here.
     """
     _ = config
+
+
+# Sender query-mode helpers
 
 
 def _validate_sender_query_input_contract(
@@ -506,6 +512,9 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
         return
 
 
+    # Shared sender workflow helpers
+
+
 def _select_sender_input_mode(raw_mode: str | None) -> tuple[str, str]:
     """Normalize sender input mode and provide a selection reason.
 
@@ -579,7 +588,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
                 continue
             
             # Check if file has been processed (marker exists in processed/)
-            processed_marker_key = _build_processed_marker_key(key)
+            processed_marker_key = _build_file_mode_processed_marker_key(key)
             try:
                 client._client.head_object(Bucket=bucket, Key=processed_marker_key)
                 LOGGER.debug(f"Skipping already processed file: {key}")
@@ -597,7 +606,7 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
 
 
 def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -> None:
-    """Create a .done marker in processed/ directory after successful processing.
+    """Create a .done marker in the file-mode processed directory after success.
 
     Parameters
     ----------
@@ -623,11 +632,15 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
         bucket, prefix = parsed
         client = S3Client(aws_region=aws_region)
         
-        # Create marker in processed/ directory using absolute path
+        # Create marker in file-mode processed directory using absolute path.
         if not prefix.endswith("/"):
             prefix = f"{prefix}/"
 
-        processed_prefix = prefix.replace(SenderStoragePath.scan_prefix(), "processed/", 1)
+        processed_prefix = prefix.replace(
+            FileModeStoragePath.scan_prefix(),
+            FileModeStoragePath.processed_prefix(),
+            1,
+        )
         marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
         timestamp = datetime.now(timezone.utc).isoformat()
         marker_metadata = {
@@ -895,9 +908,9 @@ def _safe_archive_member_name(file_name: str) -> str:
 def _build_sender_transfer_key(selected_mode: str, transfer_session_id: str, file_name: str) -> str:
     """Build sender staging transfer key based on input mode."""
     if selected_mode == "query":
-        return f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id}/{file_name}"
+        return QueryModeStoragePath.transfers(transfer_session_id, file_name)
 
-    return SenderStoragePath.transfers(transfer_session_id, file_name)
+    return FileModeStoragePath.transfers(transfer_session_id, file_name)
 
 
 def _select_file_mode_source(config: AgentConfig) -> tuple[str, str] | None:
@@ -1411,9 +1424,9 @@ def _run_sender_transfer_pipeline(
             "artifact_count": len(staged_artifacts),
             "remote_prefix": f"/{config.sender_agency}/{config.transfer_session_id}/",
             "staging_prefix": (
-                f"{QUERY_MODE_TRANSFERS_PREFIX}/{config.transfer_session_id}/"
+                QueryModeStoragePath.transfer_prefix(config.transfer_session_id)
                 if selected_mode == "query"
-                else f"transfers/{config.transfer_session_id}/"
+                else FileModeStoragePath.transfer_prefix(config.transfer_session_id)
             ),
             "staged_bytes": total_staged_bytes,
         },
@@ -1544,7 +1557,10 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                     extra={
                         "event": "sender_file_marked",
                         "file_name": file_name,
-                        "marker_location": f"{config.sender_data_directory}../processed/{file_name}{DONE_MARKER_SUFFIX}",
+                        "marker_location": (
+                            f"{config.sender_data_directory}../"
+                            f"{FileModeStoragePath.processed_prefix()}{file_name}{DONE_MARKER_SUFFIX}"
+                        ),
                     },
                 )
 

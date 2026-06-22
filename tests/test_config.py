@@ -451,7 +451,7 @@ def test_load_config_sender_data_directory_ignores_env_override(
 
     config = load_config()
 
-    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/outgoing/"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/file_mode/outgoing/"
 
 
 def test_load_config_sender_data_directory_derived_from_sender_bucket(
@@ -466,7 +466,7 @@ def test_load_config_sender_data_directory_derived_from_sender_bucket(
     config = load_config()
 
     assert config.sender_staging_bucket == "tts-core-dev-dot-data-staging"
-    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/outgoing/"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/file_mode/outgoing/"
 
 
 # ---------------------------------------------------------------------------

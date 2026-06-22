@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from .exceptions import ConfigurationError, StorageError
 from .logging_utils import get_logger, prefix_log_message
+from .storage.conventions import QueryModeStoragePath
 
 try:
     import ibis
@@ -50,11 +51,6 @@ if TYPE_CHECKING:
 LOGGER = get_logger("redwood_dataagent")
 SUPPORTED_DB_ENGINES = ("postgres",)
 QUERY_RESULT_FINGERPRINT_LENGTH = 12
-QUERY_MODE_ROOT_PREFIX = "query_mode"
-QUERY_MODE_OUTGOING_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/outgoing"
-QUERY_MODE_PROCESSED_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/processed"
-
-
 @dataclass
 class QueryExecutionResult:
     """Metadata from a successful query execution."""
@@ -94,7 +90,7 @@ def _build_query_fingerprint(contract: SenderQueryInputContract) -> str:
 
 def _build_query_processed_marker_key(template_id: str, fingerprint: str) -> str:
     """Build S3 object key for a successful query execution marker."""
-    return f"{QUERY_MODE_PROCESSED_PREFIX}/{template_id}/{fingerprint}.done"
+    return QueryModeStoragePath.processed_marker(template_id, fingerprint)
 
 
 def _short_fingerprint(fingerprint: str, length: int = QUERY_RESULT_FINGERPRINT_LENGTH) -> str:
@@ -491,7 +487,7 @@ def _upload_results_to_s3(
         # Build S3 key: query_mode/outgoing/{transfer_session_id}/{template_id}_{fingerprint12}_results.csv
         short_fingerprint = _short_fingerprint(query_fingerprint)
         s3_key = (
-            f"{QUERY_MODE_OUTGOING_PREFIX}/{transfer_session_id}/"
+            f"{QueryModeStoragePath.outgoing_prefix()}{transfer_session_id}/"
             f"{template_id}_{short_fingerprint}_results.csv"
         )
 

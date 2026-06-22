@@ -3,8 +3,9 @@
 import pytest
 
 from redwood_dataagent.storage import (
+    FileModeStoragePath,
+    QueryModeStoragePath,
     ReceiverStoragePath,
-    SenderStoragePath,
     StoragePurpose,
     build_receiver_bucket,
     build_sender_bucket,
@@ -136,17 +137,21 @@ class TestBuildReceiverBucket:
             build_receiver_bucket("gsa", "dev", "")
 
 
-class TestSenderStoragePath:
-    """Test sender-side path builders."""
+class TestFileModeStoragePath:
+    """Test file-mode sender path builders."""
 
     def test_scan_prefix(self):
         """Verify outgoing prefix format used for sender file scan."""
-        assert SenderStoragePath.scan_prefix() == "outgoing/"
+        assert FileModeStoragePath.scan_prefix() == "file_mode/outgoing/"
+
+    def test_processed_prefix(self):
+        """Verify processed prefix format used for sender file idempotency."""
+        assert FileModeStoragePath.processed_prefix() == "file_mode/processed/"
 
     def test_transfers_path(self):
         """Verify transfers path format."""
-        path = SenderStoragePath.transfers("transfer-001", "data.tar.gz")
-        assert path == "transfers/transfer-001/data.tar.gz"
+        path = FileModeStoragePath.transfers("transfer-001", "data.tar.gz")
+        assert path == "file_mode/transfers/transfer-001/data.tar.gz"
 
     def test_transfers_with_different_filenames(self):
         """Verify transfers path with various file names."""
@@ -156,28 +161,50 @@ class TestSenderStoragePath:
             ("session-abc-123", "manifest.json"),
         ]
         for session_id, filename in test_cases:
-            path = SenderStoragePath.transfers(session_id, filename)
-            assert path == f"transfers/{session_id}/{filename}"
+            path = FileModeStoragePath.transfers(session_id, filename)
+            assert path == f"file_mode/transfers/{session_id}/{filename}"
 
     def test_blank_transfer_session_id_raises(self):
         """Verify blank transfer_session_id raises ValueError."""
         with pytest.raises(ValueError, match="path component cannot be blank"):
-            SenderStoragePath.transfers("", "data.tar.gz")
+            FileModeStoragePath.transfers("", "data.tar.gz")
 
     def test_whitespace_transfer_session_id_raises(self):
         """Verify whitespace-only transfer_session_id raises ValueError."""
         with pytest.raises(ValueError, match="path component cannot be blank"):
-            SenderStoragePath.transfers("   ", "data.tar.gz")
+            FileModeStoragePath.transfers("   ", "data.tar.gz")
 
     def test_blank_file_name_raises(self):
         """Verify blank file_name raises ValueError."""
         with pytest.raises(ValueError, match="path component cannot be blank"):
-            SenderStoragePath.transfers("transfer-001", "")
+            FileModeStoragePath.transfers("transfer-001", "")
 
     def test_whitespace_file_name_raises(self):
         """Verify whitespace-only file_name raises ValueError."""
         with pytest.raises(ValueError, match="path component cannot be blank"):
-            SenderStoragePath.transfers("transfer-001", "   ")
+            FileModeStoragePath.transfers("transfer-001", "   ")
+
+
+class TestQueryModeStoragePath:
+    """Test query-mode sender path builders."""
+
+    def test_outgoing_prefix(self):
+        """Verify outgoing prefix format used for staged query results."""
+        assert QueryModeStoragePath.outgoing_prefix() == "query_mode/outgoing/"
+
+    def test_processed_prefix(self):
+        """Verify processed prefix format used for query markers."""
+        assert QueryModeStoragePath.processed_prefix() == "query_mode/processed/"
+
+    def test_processed_marker(self):
+        """Verify processed marker format for successful query runs."""
+        marker = QueryModeStoragePath.processed_marker("dot_contract_extract_v1", "abc123")
+        assert marker == "query_mode/processed/dot_contract_extract_v1/abc123.done"
+
+    def test_transfers_path(self):
+        """Verify query-mode transfers path format."""
+        path = QueryModeStoragePath.transfers("transfer-001", "results.csv")
+        assert path == "query_mode/transfers/transfer-001/results.csv"
 
 
 class TestReceiverStoragePath:
@@ -277,11 +304,11 @@ class TestStorageConventionsIntegration:
         assert bucket == "tts-core-dev-dot-data-staging"
 
         session_id = "transfer-20260324-001"
-        data_path = SenderStoragePath.transfers(session_id, "data.tar.gz")
-        manifest_path = SenderStoragePath.transfers(session_id, "manifest.json")
+        data_path = FileModeStoragePath.transfers(session_id, "data.tar.gz")
+        manifest_path = FileModeStoragePath.transfers(session_id, "manifest.json")
 
-        assert data_path == "transfers/transfer-20260324-001/data.tar.gz"
-        assert manifest_path == "transfers/transfer-20260324-001/manifest.json"
+        assert data_path == "file_mode/transfers/transfer-20260324-001/data.tar.gz"
+        assert manifest_path == "file_mode/transfers/transfer-20260324-001/manifest.json"
 
     def test_full_receiver_workflow(self):
         """Verify complete receiver-side transfer workflow."""
