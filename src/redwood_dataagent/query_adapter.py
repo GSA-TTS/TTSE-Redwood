@@ -13,6 +13,41 @@ Responsibilities:
 - Write results to CSV staging files in S3
 - Track execution metadata (row count, file size, duration)
 - Return actionable error details on failure
+- Emit audit events for extraction lifecycle observability
+
+Timeout Policy
+--------------
+Each query execution enforces a configurable timeout via SIGALRM signal handling:
+- Timeout value: Derived from contract.timeout_seconds (default: 600s)
+- Enforcement: Signal-based interruption at the kernel level
+- Behavior on timeout: Raises StorageError with clear timeout message
+- Error details: Includes timeout duration and recommendations for parameter adjustment
+
+Configuration:
+  - AgentConfig.max_query_timeout_seconds: System-wide maximum (default: 600s)
+  - SenderQueryInputContract.timeout_seconds: Per-query override
+  - DB connection: Uses DB_HOST, DB_PORT, DB_NAME, DB_USERNAME, DB_PASSWORD environment variables
+
+Retry Policy
+------------
+Query execution follows idempotency semantics via execution fingerprinting:
+- Fingerprint generation: Hash of template_id, params, row_limit, timeout_seconds, and DB config
+- Idempotency marker: Stored in S3 query_mode/processed/ after successful execution
+- Marker detection: Skips query if marker exists (early return with skipped=True)
+- Use case: Safe to retry failed transfers without re-executing the same query
+- Error handling: Failed queries do NOT create markers; next attempt will re-execute
+
+Observability
+-------------
+All query execution stages emit structured audit events:
+- EXTRACT_DATA (SUCCESS): Emitted on successful query execution with metadata
+  Details: row_count, file_size_bytes, duration_seconds, output_file_path, fingerprint
+- EXTRACT_DATA (FAILURE): Emitted on failure with error type and message
+  Details: error_type, error_message, duration_seconds
+- EXTRACT_DATA (SUCCESS, skipped): Emitted when query was already processed
+  Details: execution_status=skipped, reason=matching_success_marker_exists
+
+Structured logging complements audit events with additional context for operator debugging.
 """
 
 from __future__ import annotations
@@ -30,6 +65,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .audit.events import AuditEventType, EventOutcome
+from .audit.logger import log_event
 from .exceptions import ConfigurationError, StorageError
 from .logging_utils import get_logger, prefix_log_message
 from .storage.conventions import QueryModeStoragePath
@@ -261,6 +298,10 @@ def _build_ibis_query(
             if "unexpected keyword argument 'schema'" not in str(exc):
                 raise
             table = con.table(table_name, database=schema_name)
+        except Exception as exc:
+            raise ConfigurationError(
+                f"Table '{table_name}' not found in schema '{schema_name}': {exc}"
+            ) from exc
 
         table = _apply_filters(table, filters)
         table = _apply_select_fields(table, select_fields)
@@ -272,7 +313,7 @@ def _build_ibis_query(
         raise
     except Exception as exc:
         raise ConfigurationError(
-            f"Failed to build query: {exc}"
+            f"Failed to build query for template '{contract.template_id}': {exc}"
         ) from exc
 
 
@@ -313,23 +354,40 @@ def _apply_single_field_filter(table: Any, field_name: str, filter_spec: Any) ->
 
 def _apply_bound_filter(table: Any, field_name: str, value: Any, bound: str) -> Any:
     """Apply one min/max predicate for a field."""
-    column = table[field_name]
-    if bound == "min":
-        predicate = column.ge(value) if hasattr(column, "ge") else column >= value
-    else:
-        predicate = column.le(value) if hasattr(column, "le") else column <= value
-    return table.filter(predicate)
+    try:
+        column = table[field_name]
+        if bound == "min":
+            predicate = column.ge(value) if hasattr(column, "ge") else column >= value
+        else:
+            predicate = column.le(value) if hasattr(column, "le") else column <= value
+        return table.filter(predicate)
+    except KeyError:
+        raise ConfigurationError(
+            f"Filter field '{field_name}' does not exist in the table. "
+            f"Please verify the field name in the query contract."
+        )
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Failed to apply {bound} filter on field '{field_name}' with value {value}: {exc}"
+        ) from exc
 
 
 def _apply_select_fields(table: Any, select_fields: list[Any]) -> Any:
-    """Apply projection while preserving compatibility with mock-based tests."""
+    """Apply column projection when select_fields are specified."""
     if not select_fields:
         return table
 
-    selected_table = table.select(select_fields)
-    if "unittest.mock" in type(selected_table).__module__:
-        return table
-    return selected_table
+    try:
+        return table.select(select_fields)
+    except KeyError as exc:
+        raise ConfigurationError(
+            f"One or more select fields do not exist in the table: {select_fields}. "
+            f"Original error: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Failed to select fields {select_fields}: {exc}"
+        ) from exc
 
 
 def _apply_ordering(table: Any, order_by: Any) -> Any:
@@ -528,30 +586,54 @@ def execute_query(
 
     Orchestration:
     1. Build Ibis query from contract (schema, table, filters, select_fields, order_by)
-    2. Execute with timeout enforcement
-    3. Write results to local CSV file
-    4. Upload to S3 staging bucket under query_mode/outgoing/{transfer_session_id}/ prefix
-    5. Return metadata (rows, bytes, duration)
+    2. Check idempotency marker (skip if already processed)
+    3. Execute with timeout enforcement (via SIGALRM signal)
+    4. Write results to local CSV file
+    5. Upload to S3 staging bucket under query_mode/outgoing/{transfer_session_id}/ prefix
+    6. Emit audit events for extraction lifecycle observability
+    7. Return metadata (rows, bytes, duration)
 
     Integration with the existing sender transfer pipeline (policy check, compression,
     manifest generation, and transfer artifact staging) will be addressed in RED-74/RED-93.
 
+    Timeout Behavior
+    ----------------
+    Query execution enforces a strict timeout via SIGALRM signal:
+    - Timeout seconds: Derived from contract.timeout_seconds (typically 600s default)
+    - If exceeded: Raises StorageError with clear timeout message
+    - Recommendation: Adjust timeout_seconds in query contract or reduce row_limit
+
+    Idempotency & Retry Policy
+    ---------------------------
+    Queries are identified by a stable fingerprint (hash of template_id, params, DB config):
+    - First execution: Creates S3 marker at query_mode/processed/{template_id}/{fingerprint}
+    - Retry scenario: If marker exists, returns QueryExecutionResult(skipped=True)
+    - Failed queries: No marker created; safe to retry without side effects
+    - Use case: Enables safe recovery and replay without duplicate data extraction
+
+    Audit Events
+    -----------
+    Each execution emits EXTRACT_DATA audit events:
+    - SUCCESS (normal): With row_count, file_size_bytes, duration_seconds
+    - SUCCESS (skipped): When idempotency marker already exists
+    - FAILURE: With error_type and error_message for troubleshooting
+
     Parameters
     ----------
     contract : SenderQueryInputContract
-        Validated query input contract
+        Validated query input contract with template_id, params, timeout_seconds
     config : AgentConfig
-        Runtime configuration with S3 bucket and region
+        Runtime configuration with transfer_session_id, S3 bucket, AWS region, agencies
 
     Returns
     -------
     QueryExecutionResult
-        Execution metadata including row count, file size, duration
+        Execution metadata including row count, file size, duration, skipped flag
 
     Raises
     ------
     ConfigurationError
-        If database connection fails or query construction fails
+        If database connection fails, query construction fails, or schema/table not found
     StorageError
         If query execution times out, fails, or file operations fail
     """
@@ -563,18 +645,22 @@ def execute_query(
     marker_key = _build_query_processed_marker_key(contract.template_id, query_fingerprint)
 
     if _query_already_processed(config, marker_key):
-        LOGGER.info(
-            prefix_log_message(
-                "Query execution skipped; matching success marker already exists",
-                transfer_session_id=config.transfer_session_id,
-            ),
-            extra={
-                "event": "query_execute_skipped",
+        log_event(
+            event_type=AuditEventType.EXTRACT_DATA,
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            stage="sender",
+            outcome=EventOutcome.SUCCESS,
+            details={
                 "template_id": contract.template_id,
+                "execution_status": "skipped",
+                "reason": "matching_success_marker_exists",
                 "fingerprint": query_fingerprint,
                 "marker_key": marker_key,
             },
         )
+        
         return QueryExecutionResult(
             row_count=0,
             file_size_bytes=0,
@@ -658,17 +744,20 @@ def execute_query(
             marker_key=marker_key,
         )
 
-        LOGGER.info(
-            prefix_log_message(
-                "Query execution completed successfully",
-                transfer_session_id=config.transfer_session_id,
-            ),
-            extra={
-                "event": "query_execute_success",
+        log_event(
+            event_type=AuditEventType.EXTRACT_DATA,
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            stage="sender",
+            outcome=EventOutcome.SUCCESS,
+            details={
                 "template_id": contract.template_id,
                 "row_count": result.row_count,
                 "file_size_bytes": result.file_size_bytes,
                 "duration_seconds": result.execution_duration_seconds,
+                "output_file_path": result.output_file_path,
+                "fingerprint": result.query_fingerprint,
             },
         )
 
@@ -676,14 +765,34 @@ def execute_query(
 
     except Exception as exc:
         execution_duration = time.time() - start_time
+        error_type = type(exc).__name__
+        error_message = str(exc)
+        
         LOGGER.error(
             prefix_log_message(
-                f"Query execution failed: {exc}",
+                f"Query execution failed: {error_message}",
                 transfer_session_id=config.transfer_session_id,
             ),
             extra={
                 "event": "query_execute_failure",
-                "error_type": type(exc).__name__,
+                "template_id": contract.template_id,
+                "error_type": error_type,
+                "duration_seconds": execution_duration,
+            },
+        )
+
+        # Emit audit event for extraction failure
+        log_event(
+            event_type=AuditEventType.EXTRACT_DATA,
+            transfer_session_id=config.transfer_session_id,
+            sender_agency=config.sender_agency,
+            receiver_agency=config.receiver_agency,
+            stage="sender",
+            outcome=EventOutcome.FAILURE,
+            details={
+                "template_id": contract.template_id,
+                "error_type": error_type,
+                "error_message": error_message,
                 "duration_seconds": execution_duration,
             },
         )

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from redwood_dataagent.agent import SenderQueryInputContract
+from redwood_dataagent.audit.events import AuditEventType, EventOutcome
 from redwood_dataagent.config import AgentConfig
 from redwood_dataagent.exceptions import ConfigurationError, StorageError
 from redwood_dataagent.query_adapter import (
@@ -130,6 +131,7 @@ class TestBuildIbisQuery:
 
         with patch("redwood_dataagent.query_adapter._get_ibis_connection") as mock_get_conn:
             mock_table = MagicMock()
+            mock_table.select.return_value = mock_table
             mock_connection = MagicMock()
             mock_connection.table.return_value = mock_table
             mock_get_conn.return_value = mock_connection
@@ -698,3 +700,190 @@ class TestExecuteQuery:
 
             with pytest.raises(ConfigurationError, match="must specify 'schema' and 'table'"):
                 execute_query(contract, config)
+
+
+class TestAuditEventEmission:
+    """Tests for audit event emission during query execution lifecycle."""
+
+    def test_execute_query_emits_extract_data_event_on_success(self, tmp_path: Path) -> None:
+        """Successful query execution emits EXTRACT_DATA event with metadata."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={
+                "schema": "dot",
+                "table": "contract_data",
+                "select_fields": ["contract_id", "vendor_name"],
+            },
+            row_limit=100,
+            timeout_seconds=60,
+        )
+
+        config = AgentConfig(
+            agent_mode="sender",
+            tenant="tts",
+            environment="dev",
+            aws_region="us-east-1",
+            log_level="INFO",
+            transfer_session_id="test-session-001",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            sender_staging_bucket="test-bucket",
+            receiver_landing_bucket="",
+            receiver_target_bucket="",
+            sender_data_directory="s3://test-bucket/scans/",
+            sftp_endpoints=["sftp.example.com"],
+            sftp_secrets_manager_name="test-secret",
+        )
+
+        with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
+             patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute, \
+             patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload, \
+             patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
+             patch("redwood_dataagent.query_adapter._upload_query_processed_marker"), \
+             patch("redwood_dataagent.query_adapter.log_event") as mock_log_event, \
+             patch("redwood_dataagent.query_adapter.signal"):
+
+            mock_table = MagicMock()
+            mock_build.return_value = (mock_table, 100)
+
+            rows = [
+                {"contract_id": "1", "vendor_name": "Acme Corp"},
+                {"contract_id": "2", "vendor_name": "Beta Inc"},
+            ]
+            mock_execute.return_value = rows
+            mock_upload.return_value = "query_mode/outgoing/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
+
+            result = execute_query(contract, config)
+
+            # Verify EXTRACT_DATA event was emitted with SUCCESS outcome
+            mock_log_event.assert_called_once()
+            call_args = mock_log_event.call_args
+            
+            assert call_args.kwargs["event_type"] == AuditEventType.EXTRACT_DATA
+            assert call_args.kwargs["transfer_session_id"] == "test-session-001"
+            assert call_args.kwargs["sender_agency"] == "dot"
+            assert call_args.kwargs["receiver_agency"] == "gsa"
+            assert call_args.kwargs["outcome"] == EventOutcome.SUCCESS
+            
+            # Verify metadata in details
+            details = call_args.kwargs["details"]
+            assert details["template_id"] == "dot_contract_extract_v1"
+            assert details["row_count"] == 2
+            assert details["file_size_bytes"] > 0
+            assert details["duration_seconds"] >= 0
+            assert "s3://" in details["output_file_path"]
+            assert len(details["fingerprint"]) > 0
+
+    def test_execute_query_emits_extract_data_event_on_failure(self) -> None:
+        """Failed query execution emits EXTRACT_DATA event with error details."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={
+                "schema": "dot",
+                "table": "nonexistent_table",
+            },
+            row_limit=100,
+            timeout_seconds=60,
+        )
+
+        config = AgentConfig(
+            agent_mode="sender",
+            tenant="tts",
+            environment="dev",
+            aws_region="us-east-1",
+            log_level="INFO",
+            transfer_session_id="test-session-001",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            sender_staging_bucket="test-bucket",
+            receiver_landing_bucket="",
+            receiver_target_bucket="",
+            sender_data_directory="s3://test-bucket/scans/",
+            sftp_endpoints=["sftp.example.com"],
+            sftp_secrets_manager_name="test-secret",
+        )
+
+        with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
+             patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
+             patch("redwood_dataagent.query_adapter.log_event") as mock_log_event:
+
+            error_msg = "Table 'nonexistent_table' not found in schema 'dot'"
+            mock_build.side_effect = ConfigurationError(error_msg)
+
+            with pytest.raises(ConfigurationError):
+                execute_query(contract, config)
+
+            # Verify EXTRACT_DATA event was emitted with FAILURE outcome
+            mock_log_event.assert_called_once()
+            call_args = mock_log_event.call_args
+            
+            assert call_args.kwargs["event_type"] == AuditEventType.EXTRACT_DATA
+            assert call_args.kwargs["outcome"] == EventOutcome.FAILURE
+            
+            # Verify error details
+            details = call_args.kwargs["details"]
+            assert details["error_type"] == "ConfigurationError"
+            assert error_msg in details["error_message"]
+            assert details["duration_seconds"] >= 0
+
+    def test_execute_query_emits_extract_data_event_on_skip(self) -> None:
+        """Skipped query execution (idempotency marker exists) emits EXTRACT_DATA event."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={
+                "schema": "dot",
+                "table": "contract_data",
+            },
+            row_limit=100,
+            timeout_seconds=60,
+        )
+
+        config = AgentConfig(
+            agent_mode="sender",
+            tenant="tts",
+            environment="dev",
+            aws_region="us-east-1",
+            log_level="INFO",
+            transfer_session_id="test-session-001",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            sender_staging_bucket="test-bucket",
+            receiver_landing_bucket="",
+            receiver_target_bucket="",
+            sender_data_directory="s3://test-bucket/scans/",
+            sftp_endpoints=["sftp.example.com"],
+            sftp_secrets_manager_name="test-secret",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "DB_HOST": "example-rds.us-east-1.rds.amazonaws.com",
+                "DB_PORT": "5432",
+                "DB_NAME": "sample_db",
+                "DB_USERNAME": "sample_user",
+                "DB_PASSWORD": "sample_password",
+            },
+            clear=False,
+        ):
+            with patch("redwood_dataagent.query_adapter.S3Client") as mock_s3_client_class, \
+                 patch("redwood_dataagent.query_adapter.log_event") as mock_log_event:
+
+                mock_client = MagicMock()
+                mock_client.object_exists.return_value = True
+                mock_s3_client_class.return_value = mock_client
+
+                result = execute_query(contract, config)
+
+                # Verify EXTRACT_DATA event was emitted with SUCCESS outcome (skipped)
+                mock_log_event.assert_called_once()
+                call_args = mock_log_event.call_args
+                
+                assert call_args.kwargs["event_type"] == AuditEventType.EXTRACT_DATA
+                assert call_args.kwargs["outcome"] == EventOutcome.SUCCESS
+                
+                # Verify skip details
+                details = call_args.kwargs["details"]
+                assert details["execution_status"] == "skipped"
+                assert details["reason"] == "matching_success_marker_exists"
+                assert result.skipped is True
