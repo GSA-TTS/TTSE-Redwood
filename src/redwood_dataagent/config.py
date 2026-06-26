@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from .exceptions import ConfigurationError
 from .storage.conventions import (
-    SenderStoragePath,
+    FileModeStoragePath,
     StoragePurpose,
     build_receiver_bucket,
     build_sender_bucket,
@@ -17,6 +17,29 @@ from .storage.conventions import (
 
 
 VALID_AGENT_MODES = {"sender", "receiver"}
+DEFAULT_MAX_QUERY_ROW_LIMIT = 1_000_000
+DEFAULT_MAX_QUERY_TIMEOUT_SECONDS = 600
+
+
+def _load_positive_int_env(var_name: str, default_value: int) -> int:
+    """Load a positive integer env var with a fallback default."""
+    raw_value = os.getenv(var_name)
+    if raw_value is None or not raw_value.strip():
+        return default_value
+
+    try:
+        parsed_value = int(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"{var_name} must be a positive integer, got '{raw_value}'"
+        ) from exc
+
+    if parsed_value < 1:
+        raise ConfigurationError(
+            f"{var_name} must be >= 1, got '{raw_value}'"
+        )
+
+    return parsed_value
 
 
 @dataclass(frozen=True)
@@ -45,6 +68,10 @@ class AgentConfig:
     sender_data_directory: str
     sftp_endpoints: list[str]
     sftp_secrets_manager_name: str
+    sender_input_mode: str = ""
+    sender_query_input_json: str = ""
+    max_query_row_limit: int = DEFAULT_MAX_QUERY_ROW_LIMIT
+    max_query_timeout_seconds: int = DEFAULT_MAX_QUERY_TIMEOUT_SECONDS
 
 
 def load_config() -> AgentConfig:
@@ -88,6 +115,20 @@ def load_config() -> AgentConfig:
         Must have keys: ``user``, ``private-key``, ``public-key``.
         Auto-derived as ``{TENANT}-core-{ENVIRONMENT}-redwood-sftp-credentials``
         if not explicitly provided.
+    SENDER_INPUT_MODE
+        Sender adapter input mode selector. Supported values are ``"file"`` and
+        ``"query"``. Missing/blank/invalid values are normalized later by the
+        sender workflow and default to ``"file"``.
+    SENDER_QUERY_INPUT_JSON
+        JSON query contract payload used when ``SENDER_INPUT_MODE=query``.
+        Expected keys: ``template_id``, ``params``, optional ``row_limit``, and
+        optional ``timeout_seconds``.
+    MAX_QUERY_ROW_LIMIT
+        Optional global maximum allowed query row limit. Defaults to
+        ``1000000`` when not provided.
+    MAX_QUERY_TIMEOUT_SECONDS
+        Optional global maximum allowed query timeout in seconds. Defaults to
+        ``600`` when not provided.
 
     Returns
     -------
@@ -154,7 +195,7 @@ def load_config() -> AgentConfig:
             sender_agency, environment, StoragePurpose.STAGING
         )
         sender_data_directory = (
-            f"s3://{sender_staging_bucket}/{SenderStoragePath.scan_prefix()}"
+            f"s3://{sender_staging_bucket}/{FileModeStoragePath.scan_prefix()}"
         )
         receiver_landing_bucket = ""
         receiver_target_bucket = ""
@@ -183,4 +224,12 @@ def load_config() -> AgentConfig:
         sender_data_directory=sender_data_directory,
         sftp_endpoints=sftp_endpoints,
         sftp_secrets_manager_name=sftp_secrets_manager_name,
+        sender_input_mode=os.getenv("SENDER_INPUT_MODE", ""),
+        sender_query_input_json=os.getenv("SENDER_QUERY_INPUT_JSON", ""),
+        max_query_row_limit=_load_positive_int_env(
+            "MAX_QUERY_ROW_LIMIT", DEFAULT_MAX_QUERY_ROW_LIMIT
+        ),
+        max_query_timeout_seconds=_load_positive_int_env(
+            "MAX_QUERY_TIMEOUT_SECONDS", DEFAULT_MAX_QUERY_TIMEOUT_SECONDS
+        ),
     )

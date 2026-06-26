@@ -23,6 +23,10 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SENDER_DATA_DIRECTORY",
         "SFTP_ENDPOINTS",
         "SFTP_SECRETS_MANAGER_NAME",
+        "SENDER_INPUT_MODE",
+        "SENDER_QUERY_INPUT_JSON",
+        "MAX_QUERY_ROW_LIMIT",
+        "MAX_QUERY_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -75,6 +79,77 @@ def test_load_config_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
         config.agent_mode = "sender"  # type: ignore[misc]
+
+
+def test_load_config_sender_input_mode_default_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SENDER_INPUT_MODE defaults to blank and is normalized by sender workflow."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+
+    config = load_config()
+
+    assert config.sender_input_mode == ""
+
+
+def test_load_config_sender_input_mode_preserves_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configured SENDER_INPUT_MODE value is loaded as provided."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("SENDER_INPUT_MODE", "QUERY")
+
+    config = load_config()
+
+    assert config.sender_input_mode == "QUERY"
+
+
+def test_load_config_query_caps_default_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Global query caps default when env vars are not provided."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+
+    config = load_config()
+
+    assert config.max_query_row_limit == 1_000_000
+    assert config.max_query_timeout_seconds == 600
+
+
+def test_load_config_query_caps_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Global query caps are loaded from env when explicitly set."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("MAX_QUERY_ROW_LIMIT", "250000")
+    monkeypatch.setenv("MAX_QUERY_TIMEOUT_SECONDS", "240")
+
+    config = load_config()
+
+    assert config.max_query_row_limit == 250000
+    assert config.max_query_timeout_seconds == 240
+
+
+def test_load_config_query_caps_invalid_non_numeric_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-numeric query cap env vars raise ConfigurationError."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("MAX_QUERY_ROW_LIMIT", "abc")
+
+    with pytest.raises(ConfigurationError, match="MAX_QUERY_ROW_LIMIT"):
+        load_config()
+
+
+def test_load_config_query_caps_invalid_non_positive_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-positive query cap env vars raise ConfigurationError."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("MAX_QUERY_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(ConfigurationError, match="MAX_QUERY_TIMEOUT_SECONDS"):
+        load_config()
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +451,7 @@ def test_load_config_sender_data_directory_ignores_env_override(
 
     config = load_config()
 
-    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/outgoing/"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/file_mode/outgoing/"
 
 
 def test_load_config_sender_data_directory_derived_from_sender_bucket(
@@ -391,7 +466,7 @@ def test_load_config_sender_data_directory_derived_from_sender_bucket(
     config = load_config()
 
     assert config.sender_staging_bucket == "tts-core-dev-dot-data-staging"
-    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/outgoing/"
+    assert config.sender_data_directory == "s3://tts-core-dev-dot-data-staging/file_mode/outgoing/"
 
 
 # ---------------------------------------------------------------------------

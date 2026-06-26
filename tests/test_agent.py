@@ -10,6 +10,7 @@ import pytest
 
 from redwood_dataagent.audit.events import EventOutcome
 from redwood_dataagent.agent import (
+    ALLOWLISTED_QUERY_TEMPLATES,
     _compute_checksum,
     _create_receiver_workflow,
     _create_sender_workflow,
@@ -17,10 +18,12 @@ from redwood_dataagent.agent import (
     _mark_file_processed,
     _parse_s3_path,
     _scan_sender_directory,
+    _select_sender_input_mode,
+    _validate_sender_query_input_contract,
     run_agent,
 )
 from redwood_dataagent.config import AgentConfig
-from redwood_dataagent.exceptions import StorageError
+from redwood_dataagent.exceptions import ConfigurationError, StorageError
 from redwood_dataagent.logging_utils import set_agent_mode, set_transfer_session_id
 from redwood_dataagent.models.manifest import ChecksumAlgorithm
 
@@ -75,6 +78,134 @@ class TestComputeChecksum:
 
         with pytest.raises(StorageError, match="Failed to read file"):
             _compute_checksum(missing_file)
+
+
+class TestSenderInputModeSelection:
+    """Tests for sender input mode normalization and fallback behavior."""
+
+    def test_select_sender_input_mode_explicit_file(self) -> None:
+        """Explicit file mode is accepted as-is."""
+        mode, reason = _select_sender_input_mode("file")
+        assert mode == "file"
+        assert reason == "explicit"
+
+    def test_select_sender_input_mode_explicit_query_case_insensitive(self) -> None:
+        """Explicit query mode is normalized to lowercase."""
+        mode, reason = _select_sender_input_mode("QUERY")
+        assert mode == "query"
+        assert reason == "explicit"
+
+    def test_select_sender_input_mode_missing_defaults_to_file(self) -> None:
+        """Missing mode defaults to file mode."""
+        mode, reason = _select_sender_input_mode(None)
+        assert mode == "file"
+        assert reason == "default_missing"
+
+    def test_select_sender_input_mode_blank_defaults_to_file(self) -> None:
+        """Blank mode defaults to file mode."""
+        mode, reason = _select_sender_input_mode("   ")
+        assert mode == "file"
+        assert reason == "default_blank"
+
+    def test_select_sender_input_mode_invalid_defaults_to_file(self) -> None:
+        """Invalid mode falls back to file mode with reason."""
+        mode, reason = _select_sender_input_mode("invalid-mode")
+        assert mode == "file"
+        assert reason.startswith("default_invalid:")
+
+
+class TestSenderQueryInputContractValidation:
+    """Tests for sender query input contract parsing and allow-list checks."""
+
+    _MAX_QUERY_ROW_LIMIT = 1_000_000
+    _MAX_QUERY_TIMEOUT_SECONDS = 600
+
+    def test_validate_query_input_contract_success(self) -> None:
+        """Allow-listed template with required params validates successfully."""
+        contract = _validate_sender_query_input_contract(
+            '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":1000,"timeout_seconds":30}',
+            self._MAX_QUERY_ROW_LIMIT,
+            self._MAX_QUERY_TIMEOUT_SECONDS,
+        )
+
+        assert contract.template_id == "dot_contract_extract_v1"
+        assert contract.params["schema"] == "dot"
+        assert contract.row_limit == 1000
+        assert contract.timeout_seconds == 30
+
+    def test_validate_query_input_contract_missing_required_param_raises(self) -> None:
+        """Missing required params for template fails fast."""
+        with pytest.raises(Exception, match="Missing required query params"):
+            _validate_sender_query_input_contract(
+                '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot"}}',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_blank_required_param_raises(self) -> None:
+        """Blank/null required params are treated as invalid for required fields."""
+        with pytest.raises(Exception, match="Missing required query params"):
+            _validate_sender_query_input_contract(
+                '{"template_id":"dot_contract_extract_v1","params":{"schema":"  ","table":null}}',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_unknown_template_raises(self) -> None:
+        """Unknown template IDs are rejected by allow-list."""
+        with pytest.raises(Exception, match="not allow-listed"):
+            _validate_sender_query_input_contract(
+                '{"template_id":"unknown_template","params":{"schema":"dot","table":"contract_data"}}',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_invalid_json_raises(self) -> None:
+        """Malformed JSON input fails with clear error."""
+        with pytest.raises(Exception, match="must be valid JSON"):
+            _validate_sender_query_input_contract(
+                "{invalid_json",
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_row_limit_exceeds_template_max_raises(self) -> None:
+        """Template-specific row limit cap is enforced."""
+        template_max = int(
+            ALLOWLISTED_QUERY_TEMPLATES["dot_contract_extract_v1"]["max_row_limit"]
+        )
+        payload = (
+            "{"
+            '"template_id":"dot_contract_extract_v1",'
+            '"params":{"schema":"dot","table":"contract_data"},'
+            f'"row_limit":{template_max + 1}'
+            "}"
+        )
+        with pytest.raises(Exception, match="exceeds allow-listed template max"):
+            _validate_sender_query_input_contract(
+                payload,
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_global_cap_overrides_looser_template(self) -> None:
+        """Global caps are enforced even if template caps are configured higher."""
+        looser_template = {
+            "required_params": {"schema", "table"},
+            "max_row_limit": 999_999,
+            "max_timeout_seconds": 9_999,
+        }
+        with patch.dict(
+            ALLOWLISTED_QUERY_TEMPLATES,
+            {"dot_contract_extract_v1": looser_template},
+            clear=False,
+        ):
+            with pytest.raises(Exception, match="exceeds allow-listed template max"):
+                _validate_sender_query_input_contract(
+                    '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":5001,"timeout_seconds":30}',
+                    max_query_row_limit=5000,
+                    max_query_timeout_seconds=600,
+                )
 
 
 class TestSenderWorkflow:
@@ -144,6 +275,197 @@ class TestSenderWorkflow:
                     
                     exit_code = _create_sender_workflow(config)
                     assert exit_code == 0
+
+    def test_sender_workflow_query_mode_missing_contract_logs_audit_failure(self) -> None:
+        """Query mode fails fast and emits extract/pipeline failure audit logs when contract is missing."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json="",
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+            with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
+                exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0  # Exit code 0 (workflow ran); outcome in audit logs
+        mock_extract_log.assert_called_once()
+        extract_details = mock_extract_log.call_args.kwargs["details"]
+        assert extract_details["step"] == "query_contract_validation"
+        assert "SENDER_QUERY_INPUT_JSON is required" in extract_details["error"]
+        mock_complete_log.assert_called_once()
+
+    def test_sender_workflow_query_mode_unknown_template_logs_audit_failure(self) -> None:
+        """Query mode rejects unknown template IDs and logs validation errors."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"bad_template","params":{"schema":"dot","table":"contract_data"}}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+            exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0  # Exit code 0 (workflow ran); outcome in audit logs
+        mock_extract_log.assert_called_once()
+        extract_details = mock_extract_log.call_args.kwargs["details"]
+        assert extract_details["step"] == "query_contract_validation"
+        assert "not allow-listed" in extract_details["error"]
+
+    def test_sender_workflow_query_mode_success_executes_adapter(self) -> None:
+        """Query mode successfully executes query and logs success outcome."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+                    with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
+                        from redwood_dataagent.query_adapter import QueryExecutionResult
+
+                        mock_client = MagicMock()
+                        mock_s3_class.return_value = mock_client
+
+                        def mock_download(bucket, key, dest):
+                            dest.write_text("id,name\n1,example\n")
+
+                        mock_client.download_file.side_effect = mock_download
+
+                        # Mock successful query execution
+                        mock_result = QueryExecutionResult(
+                            row_count=42,
+                            file_size_bytes=5120,
+                            execution_duration_seconds=1.23,
+                            output_file_path="s3://bucket/query_mode/outgoing/session-123/dot_contract_extract_v1_ce9b55325ce3_results.csv",
+                        )
+                        mock_execute.return_value = mock_result
+
+                        exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0  # Query mode returns 0 (workflow ran successfully)
+        mock_execute.assert_called_once()
+
+        # Verify extraction was logged as SUCCESS with metadata
+        mock_extract_log.assert_called_once()
+        extract_call = mock_extract_log.call_args
+        assert extract_call.kwargs["outcome"] == EventOutcome.SUCCESS
+        extract_details = extract_call.kwargs["details"]
+        assert extract_details["row_count"] == 42
+        assert extract_details["file_size_bytes"] == 5120
+        assert extract_details["template_id"] == "dot_contract_extract_v1"
+
+        # Verify pipeline completion was logged as SUCCESS
+        mock_complete_log.assert_called_once()
+        complete_call = mock_complete_log.call_args
+        assert complete_call.kwargs["outcome"] == EventOutcome.SUCCESS
+        complete_details = complete_call.kwargs["details"]
+        assert complete_details["row_count"] == 42
+
+    def test_sender_workflow_query_mode_uses_existing_transfer_pipeline(self) -> None:
+        """Query mode routes extracted output through compress/manifest/staging steps."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                with patch("redwood_dataagent.agent._mark_file_processed") as mock_mark_processed:
+                    with patch("redwood_dataagent.agent.log_compress") as mock_log_compress:
+                        with patch("redwood_dataagent.agent.log_manifest_created") as mock_log_manifest:
+                            from redwood_dataagent.query_adapter import QueryExecutionResult
+
+                            mock_client = MagicMock()
+                            mock_s3_class.return_value = mock_client
+
+                            def mock_download(bucket, key, dest):
+                                dest.write_text("id,name\n1,example\n")
+
+                            mock_client.download_file.side_effect = mock_download
+
+                            mock_execute.return_value = QueryExecutionResult(
+                                row_count=42,
+                                file_size_bytes=5120,
+                                execution_duration_seconds=1.23,
+                                output_file_path="s3://bucket/query_mode/outgoing/session-123/dot_contract_extract_v1_ce9b55325ce3_results.csv",
+                            )
+
+                            exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0
+        mock_execute.assert_called_once()
+        # Query file is downloaded once, then archive + manifest are staged.
+        assert mock_client.download_file.call_count == 1
+        assert mock_client.upload_file.call_count == 2
+        mock_log_compress.assert_called_once()
+        mock_log_manifest.assert_called_once()
+        manifest_details = mock_log_manifest.call_args.kwargs["details"]
+        assert manifest_details["manifest_path"].startswith(
+            "query_mode/transfers/session-123/"
+        )
+        staged_keys = [call.args[2] for call in mock_client.upload_file.call_args_list]
+        assert "query_mode/transfers/session-123/transfer.tar.gz" in staged_keys
+        assert "query_mode/transfers/session-123/manifest.json" in staged_keys
+        mock_mark_processed.assert_not_called()
+
+    def test_sender_workflow_query_mode_adapter_failure_logs_failure(self) -> None:
+        """Query mode handles adapter failures and logs error outcome."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+                with patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete_log:
+                    from redwood_dataagent.exceptions import StorageError
+
+                    # Mock query timeout
+                    mock_execute.side_effect = StorageError("Query execution exceeded 30s timeout")
+
+                    exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0  # Exit code is 0 (workflow ran); outcome captured in audit logs
+        mock_extract_log.assert_called_once()
+
+        # Verify extraction was logged as FAILURE
+        extract_call = mock_extract_log.call_args
+        assert extract_call.kwargs["outcome"] == EventOutcome.FAILURE
+        extract_details = extract_call.kwargs["details"]
+        assert extract_details["step"] == "query_execution"
+        assert "timeout" in extract_details["error"].lower()
+
+        # Verify pipeline completion was logged as FAILURE
+        mock_complete_log.assert_called_once()
+        complete_call = mock_complete_log.call_args
+        assert complete_call.kwargs["outcome"] == EventOutcome.FAILURE
+
+    def test_sender_workflow_query_mode_execution_configuration_error_logs_query_execution_failure(self) -> None:
+        """Execution-time ConfigurationError is logged as query execution failure, not contract validation."""
+        config = self._make_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":30}',
+            sender_data_directory="s3://bucket/outgoing/",
+        )
+
+        with patch("redwood_dataagent.agent.execute_query") as mock_execute:
+            with patch("redwood_dataagent.agent.log_extract_data") as mock_extract_log:
+                mock_execute.side_effect = ConfigurationError(
+                    "Ibis library is not installed. Install with: pip install ibis-framework[postgres]"
+                )
+
+                exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0
+        mock_extract_log.assert_called_once()
+        extract_details = mock_extract_log.call_args.kwargs["details"]
+        assert extract_details["step"] == "query_execution"
+        assert "Ibis library is not installed" in extract_details["error"]
 
     def test_sender_workflow_requires_sender_file(self) -> None:
         """Sender workflow succeeds gracefully when no sender data directory is configured (idempotent)."""
@@ -298,6 +620,11 @@ class TestSenderWorkflow:
                                         mock_manifest.assert_called_once()
                                         mock_stage_start.assert_called_once()
                                         mock_stage_complete.assert_called_once()
+                                        staged_keys = [
+                                            call.args[2] for call in mock_client.upload_file.call_args_list
+                                        ]
+                                        assert "file_mode/transfers/session-123/transfer.tar.gz" in staged_keys
+                                        assert "file_mode/transfers/session-123/manifest.json" in staged_keys
 
     def test_sender_workflow_upload_failure_logs_failure_and_returns_error(self, tmp_path: Path) -> None:
         """Sender workflow exits non-zero when staging upload fails before SFTP transfer."""

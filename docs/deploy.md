@@ -51,6 +51,15 @@ Sender-only:
 
 - `SFTP_ENDPOINTS`: comma-separated endpoints; required in sender mode.
 - `SFTP_SECRETS_MANAGER_NAME`: optional; default derived as `{TENANT}-core-{ENVIRONMENT}-redwood-sftp-credentials`.
+- `SENDER_INPUT_MODE`: sender input mode selector. Supported values: `file`, `query`. Default/fallback is `file`.
+- `SENDER_QUERY_INPUT_JSON`: required when `SENDER_INPUT_MODE=query`; JSON payload with `template_id`, `params`, optional `row_limit`, and optional `timeout_seconds`.
+- `MAX_QUERY_ROW_LIMIT`: optional global query row cap; defaults to `1000000` when not set.
+- `MAX_QUERY_TIMEOUT_SECONDS`: optional global query timeout cap in seconds; defaults to `600` when not set.
+
+Query-template allow-list note:
+
+- Allowed query templates are maintained in `src/redwood_dataagent/query_templates.py`.
+- This allow-list is expected to be expanded or modified as required when onboarding additional agencies.
 
 Receiver-only:
 
@@ -99,6 +108,43 @@ SFTP secret payload must include:
 
 Store and mount these using your platform-native secret manager and workload identity policy.
 
+## 6.1 Query Mode (Ibis Adapter) Requirements
+
+When deploying with `SENDER_INPUT_MODE=query`:
+
+- Source database must be accessible from the container's network
+- RDS credentials should be injected as environment variables from a deployment-specific secret source configured by your platform
+- Set `DB_ENGINE=<engine>` (default is `postgres`; current implementation target)
+- The following environment variables must be present (provided by your deployment configuration):
+  - `DB_HOST` — RDS endpoint hostname
+  - `DB_PORT` — RDS port (default: `5432`)
+  - `DB_NAME` — database name
+  - `DB_USERNAME` — database user
+  - `DB_PASSWORD` — database password
+
+Future database expansion (high level):
+
+- Current implementation target is `DB_ENGINE=postgres`.
+- To onboard a different database engine, deployment updates will be required for:
+  - Engine-specific connector configuration (`DB_ENGINE` value)
+  - Engine-specific connection settings/secrets (host/port/auth fields as required)
+  - Container dependencies/drivers needed by that engine
+
+Dependency/install note for future engines:
+
+- Current package dependency includes `ibis-framework[postgres]` for the active `postgres` backend.
+- If a new database backend is added, update package dependencies to include that backend's Ibis extra (or equivalent driver set).
+- If backend dependencies are refactored into optional install groups, update container install commands (for example in Docker build and CI install steps) to install the matching group.
+
+- Set `SENDER_QUERY_INPUT_JSON` to a JSON payload with your query contract
+- Ensure the template ID in the contract is allow-listed in `src/redwood_dataagent/query_templates.py`
+- Query results are staged to S3 under `query/{transfer_session_id}/{template_id}_{fingerprint12}_results.csv`
+- Query mode writes a success marker after a completed run; repeated runs with the same query criteria and source DB context are skipped
+
+See the [README](../README.md) for detailed query mode architecture, contract structure, and examples.
+
+Integration with the existing sender transfer pipeline (policy check, compression, manifest generation, and transfer artifact staging) will be addressed in RED-74/RED-93.
+
 ## 7. Deploy as Sender
 
 Set:
@@ -111,6 +157,11 @@ Set:
 - `LOG_LEVEL=INFO` (or as needed)
 - `SFTP_ENDPOINTS=<endpoint1,endpoint2,...>`
 - `SFTP_SECRETS_MANAGER_NAME=<secret_name>` (optional override)
+- `SENDER_INPUT_MODE=file` (recommended default; set to `query` when query extraction is enabled)
+- `DB_ENGINE=<engine>` (required when `SENDER_INPUT_MODE=query`; default is `postgres`)
+- `SENDER_QUERY_INPUT_JSON=<json payload>` (required when `SENDER_INPUT_MODE=query`)
+- `MAX_QUERY_ROW_LIMIT=<int>` (optional global cap; defaults to `1000000`)
+- `MAX_QUERY_TIMEOUT_SECONDS=<int>` (optional global cap; defaults to `600`)
 
 Example container run:
 
@@ -123,6 +174,7 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -e LOG_LEVEL=INFO \
   -e SFTP_ENDPOINTS=sftp.example.org \
+  -e SENDER_INPUT_MODE=file \
   ghcr.io/<org>/<image>:<tag>
 ```
 
@@ -188,6 +240,8 @@ spec:
               value: INFO
             - name: SFTP_ENDPOINTS
               value: sftp.example.org
+            - name: SENDER_INPUT_MODE
+              value: file
 ```
 
 ## 10. Validation Checklist After Deployment
