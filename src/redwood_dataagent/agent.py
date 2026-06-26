@@ -51,7 +51,7 @@ from .policy import PolicyApprover
 from .query_templates import ALLOWLISTED_QUERY_TEMPLATES
 from .receiver.landing import ReceiverLandingZone
 from .receiver.store import ReceiverTargetStore
-from .sftp import create_sftp_client_from_secrets_manager
+from .sftp import create_sftp_client_from_credentials
 from .storage.conventions import FileModeStoragePath, QueryModeStoragePath
 
 # Create module logger (will auto-inject transfer_session_id from context)
@@ -1356,10 +1356,10 @@ def _run_sender_transfer_pipeline(
             },
         )
 
-    sftp_client = create_sftp_client_from_secrets_manager(
+    sftp_client = create_sftp_client_from_credentials(
         sftp_endpoints=config.sftp_endpoints,
-        secrets_manager_name=config.sftp_secrets_manager_name,
-        aws_region=config.aws_region,
+        username=config.sftp_username,
+        private_key_content=config.sftp_private_key,
     )
     primary_sftp_endpoint = config.sftp_endpoints[0]
     total_sftp_uploaded_bytes = 0

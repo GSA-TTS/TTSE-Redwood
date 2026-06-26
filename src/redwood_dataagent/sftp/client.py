@@ -249,7 +249,7 @@ class SFTPClient:
                 )
                 raise SFTPError(
                     f"SFTP authentication failed for {self._username}@{host}. "
-                    "Check credentials in Secrets Manager."
+                    "Check injected SFTP credentials."
                 ) from e
             except self._paramiko.SSHException as e:
                 last_error = SFTPError(
