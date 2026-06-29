@@ -214,7 +214,7 @@ class TestSenderWorkflow:
     @pytest.fixture(autouse=True)
     def _mock_sftp_client_factory(self):
         """Mock SFTP client creation for sender workflow unit tests."""
-        with patch("redwood_dataagent.agent.create_sftp_client_from_secrets_manager") as mock_factory:
+        with patch("redwood_dataagent.agent.create_sftp_client_from_credentials") as mock_factory:
             mock_sftp_client = MagicMock()
             mock_factory.return_value = mock_sftp_client
 
@@ -246,7 +246,7 @@ class TestSenderWorkflow:
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_directory": None,
             "sftp_endpoints": ["sftp.example.com"],
-            "sftp_secrets_manager_name": "tts-core-development-redwood-sftp-credentials",
+            "sftp_username": "tts-core-development-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -716,7 +716,7 @@ class TestReceiverWorkflow:
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_directory": "",
             "sftp_endpoints": ["sftp.example.com"],
-            "sftp_secrets_manager_name": "tts-core-development-redwood-sftp-credentials",
+            "sftp_username": "tts-core-development-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -1087,7 +1087,7 @@ class TestRunAgent:
             "receiver_target_bucket": "tts-core-development-gsa-data-target",
             "sender_data_directory": None,
             "sftp_endpoints": ["sftp.example.com"],
-            "sftp_secrets_manager_name": "tts-core-development-redwood-sftp-credentials",
+            "sftp_username": "tts-core-development-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
@@ -1101,7 +1101,7 @@ class TestRunAgent:
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._download_from_s3") as mock_download:
                 with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
-                    with patch("redwood_dataagent.agent.create_sftp_client_from_secrets_manager") as mock_sftp_factory:
+                    with patch("redwood_dataagent.agent.create_sftp_client_from_credentials") as mock_sftp_factory:
                         mock_client = MagicMock()
                         mock_s3_class.return_value = mock_client
                         
@@ -1247,7 +1247,7 @@ class TestDownloadFromS3:
             "receiver_target_bucket": "tts-core-dev-gsa-data-target",
             "sender_data_directory": "",
             "sftp_endpoints": ["sftp.example.com"],
-            "sftp_secrets_manager_name": "tts-core-dev-redwood-sftp-credentials",
+            "sftp_username": "tts-core-dev-redwood-sftp-credentials",
         }
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore

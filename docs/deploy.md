@@ -24,14 +24,14 @@ Your AWS environment must provide:
 
 - Container runtime (ECS, EKS, Elastic Beanstalk, or equivalent) capable of running the published image.
 - S3 buckets for staging (sender), landing (receiver), and target (receiver) storage.
-- IAM role with permissions to read/write required S3 buckets and access AWS Secrets Manager.
-- AWS Secrets Manager secret containing SFTP credentials (for sender mode).
+- IAM role with permissions to read/write required S3 buckets.
+- Kubernetes/ExternalSecret-backed secret containing SFTP credentials (for sender mode).
 - CloudWatch or equivalent log collection from container stdout/stderr.
 
 Notes:
 
-- The implementation uses AWS S3 API via `boto3` and AWS Secrets Manager for credential management.
-- Ensure the IAM role has least-privilege access to required buckets and the secrets manager secret.
+- The implementation uses AWS S3 API via `boto3`.
+- Ensure the IAM role has least-privilege access to required buckets.
 
 ## 3. Required Environment Variables
 
@@ -41,7 +41,7 @@ Common:
 
 - `AGENT_MODE`: `sender` or `receiver`.
 - `AGENCY`: agency code for this deployment (required).
-- `TENANT`: default `tts`; used to derive default SFTP secret name when `SFTP_SECRETS_MANAGER_NAME` is not set. Example default secret: `{TENANT}-core-{ENVIRONMENT}-redwood-sftp-credentials`.
+- `TENANT`: default `tts`.
 - `ENVIRONMENT`: default `development`; used in storage bucket naming and default SFTP secret naming. This value must match your deployed AWS resource naming (commonly `dev`, `staging`, or `prod`). Example sender bucket pattern: `tts-core-{ENVIRONMENT}-{AGENCY}-data-staging`.
 - `AWS_REGION`: default `us-east-1`.
 - `LOG_LEVEL`: default `INFO`; supported values are Python standard levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
@@ -50,7 +50,8 @@ Common:
 Sender-only:
 
 - `SFTP_ENDPOINTS`: comma-separated endpoints; required in sender mode.
-- `SFTP_SECRETS_MANAGER_NAME`: optional; default derived as `{TENANT}-core-{ENVIRONMENT}-redwood-sftp-credentials`.
+- `SFTP_USERNAME`: required in sender mode; injected from Kubernetes secret.
+- `SFTP_PRIVATE_KEY`: required in sender mode; injected from Kubernetes secret.
 - `SENDER_INPUT_MODE`: sender input mode selector. Supported values: `file`, `query`. Default/fallback is `file`.
 - `SENDER_QUERY_INPUT_JSON`: required when `SENDER_INPUT_MODE=query`; JSON payload with `template_id`, `params`, optional `row_limit`, and optional `timeout_seconds`.
 - `MAX_QUERY_ROW_LIMIT`: optional global query row cap; defaults to `1000000` when not set.
@@ -156,7 +157,8 @@ Set:
 - `AWS_REGION=<region>`
 - `LOG_LEVEL=INFO` (or as needed)
 - `SFTP_ENDPOINTS=<endpoint1,endpoint2,...>`
-- `SFTP_SECRETS_MANAGER_NAME=<secret_name>` (optional override)
+- `SFTP_USERNAME=<sftp_user>`
+- `SFTP_PRIVATE_KEY=<openssh_private_key_content>`
 - `SENDER_INPUT_MODE=file` (recommended default; set to `query` when query extraction is enabled)
 - `DB_ENGINE=<engine>` (required when `SENDER_INPUT_MODE=query`; default is `postgres`)
 - `SENDER_QUERY_INPUT_JSON=<json payload>` (required when `SENDER_INPUT_MODE=query`)
@@ -347,5 +349,5 @@ Example receiver logs to look for:
 
 - Run sender and receiver as separate deployments (ECS tasks, EKS pods, etc).
 - Keep `replicas: 1` per mode unless you add explicit distributed locking/idempotency controls for concurrent workers.
-- Rotate AWS credentials and secrets using AWS Secrets Manager rotation policies.
+- Rotate Kubernetes-backed SFTP credentials using your platform secret rotation policy.
 - Forward container logs to CloudWatch or your central observability platform for auditing and incident response.

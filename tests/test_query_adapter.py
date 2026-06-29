@@ -395,7 +395,7 @@ class TestUploadResultsToS3:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch("redwood_dataagent.query_adapter.S3Client") as mock_s3_client_class:
@@ -433,7 +433,7 @@ class TestUploadResultsToS3:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch("redwood_dataagent.query_adapter.S3Client") as mock_s3_client_class:
@@ -481,7 +481,7 @@ class TestExecuteQuery:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
@@ -536,7 +536,7 @@ class TestExecuteQuery:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch.dict(
@@ -597,7 +597,7 @@ class TestExecuteQuery:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch.dict(
@@ -658,7 +658,7 @@ class TestExecuteQuery:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
@@ -692,7 +692,7 @@ class TestExecuteQuery:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build:
@@ -732,7 +732,7 @@ class TestAuditEventEmission:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
@@ -800,7 +800,7 @@ class TestAuditEventEmission:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
@@ -852,7 +852,7 @@ class TestAuditEventEmission:
             receiver_target_bucket="",
             sender_data_directory="s3://test-bucket/scans/",
             sftp_endpoints=["sftp.example.com"],
-            sftp_secrets_manager_name="test-secret",
+            sftp_username="test-secret",
         )
 
         with patch.dict(

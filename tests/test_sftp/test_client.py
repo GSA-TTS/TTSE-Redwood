@@ -493,7 +493,7 @@ class TestSFTPClientConnect:
     @mock.patch("paramiko.RSAKey")
     @mock.patch("paramiko.SSHClient")
     def test_connect_with_key_content(self, mock_ssh_class, mock_rsa_key):
-        """Test _connect with key content (from Secrets Manager)."""
+        """Test _connect with key content (from injected env credentials)."""
         key_content = "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
         mock_key_instance = mock.MagicMock()
         mock_rsa_key.from_private_key.return_value = mock_key_instance
@@ -597,7 +597,7 @@ class TestSFTPClientConnect:
             password="wrong",
         )
 
-        with pytest.raises(SFTPError, match="Check credentials in Secrets Manager"):
+        with pytest.raises(SFTPError, match="Check injected SFTP credentials"):
             client._connect()
 
     @mock.patch("paramiko.SSHClient")
@@ -620,7 +620,7 @@ class TestSFTPClientConnect:
             password="wrong",
         )
 
-        with pytest.raises(SFTPError, match="Check credentials in Secrets Manager"):
+        with pytest.raises(SFTPError, match="Check injected SFTP credentials"):
             client._connect()
 
         assert mock_ssh_class.call_count == 1
