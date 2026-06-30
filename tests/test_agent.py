@@ -11,6 +11,16 @@ import pytest
 from redwood_dataagent.audit.events import EventOutcome
 from redwood_dataagent.agent import (
     ALLOWLISTED_QUERY_TEMPLATES,
+    _build_file_mode_processed_marker_key,
+    _create_sender_query_workflow,
+    _extract_data,
+    _prepare_file_mode_input,
+    _prepare_query_mode_input,
+    _prepare_sender_data_file,
+    _resolve_configured_file,
+    _run_sender_transfer_pipeline,
+    _safe_archive_member_name,
+    _write_sender_manifest_output,
     _compute_checksum,
     _create_receiver_workflow,
     _create_sender_workflow,
@@ -206,6 +216,277 @@ class TestSenderQueryInputContractValidation:
                     max_query_row_limit=5000,
                     max_query_timeout_seconds=600,
                 )
+
+    def test_validate_query_input_contract_invalid_payload_shape_raises(self) -> None:
+        """Non-object JSON payload fails Pydantic validation branch."""
+        with pytest.raises(Exception, match="Invalid query input contract"):
+            _validate_sender_query_input_contract(
+                '["not-an-object"]',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+    def test_validate_query_input_contract_timeout_exceeds_limit_raises(self) -> None:
+        """Template/global timeout cap is enforced."""
+        with pytest.raises(Exception, match="timeout_seconds .* exceeds allow-listed template max"):
+            _validate_sender_query_input_contract(
+                '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"},"row_limit":100,"timeout_seconds":9999}',
+                self._MAX_QUERY_ROW_LIMIT,
+                self._MAX_QUERY_TIMEOUT_SECONDS,
+            )
+
+
+class TestAgentHelperCoverage:
+    """Targeted helper tests to increase agent.py branch coverage."""
+
+    def _make_sender_config(self, **kwargs: object) -> AgentConfig:
+        defaults = {
+            "agent_mode": "sender",
+            "tenant": "tts",
+            "environment": "development",
+            "aws_region": "us-east-1",
+            "log_level": "INFO",
+            "transfer_session_id": "session-123",
+            "sender_agency": "dot",
+            "receiver_agency": "gsa",
+            "sender_staging_bucket": "tts-core-development-dot-data-staging",
+            "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
+            "receiver_target_bucket": "tts-core-development-gsa-data-target",
+            "sender_data_directory": "s3://bucket/file_mode/outgoing/",
+            "sftp_endpoints": ["sftp.example.com"],
+            "sftp_username": "secret-ref",
+        }
+        defaults.update(kwargs)
+        return AgentConfig(**defaults)  # type: ignore[arg-type]
+
+    def test_build_file_mode_processed_marker_key_variants(self) -> None:
+        """Marker key builder supports canonical, embedded, and fallback key shapes."""
+        assert _build_file_mode_processed_marker_key("file_mode/outgoing/a.json") == "file_mode/processed/a.json.done"
+        assert _build_file_mode_processed_marker_key("prefix/file_mode/outgoing/a.json") == "prefix/file_mode/processed/a.json.done"
+        assert _build_file_mode_processed_marker_key("misc/a.json") == "file_mode/processed/a.json.done"
+
+    def test_extract_data_placeholder_noop(self) -> None:
+        """Placeholder extraction hook is a no-op for Day 1."""
+        _extract_data(self._make_sender_config())
+
+    def test_prepare_sender_data_file_missing_sender_data_file_raises(self, tmp_path: Path) -> None:
+        """Missing sender_data_file triggers extraction hook and raises guidance error."""
+        config = MagicMock()
+        config.sender_data_file = None
+        config.aws_region = "us-east-1"
+        with pytest.raises(StorageError, match="Sender data file is required for Day 1"):
+            _prepare_sender_data_file(config, tmp_path)
+
+    def test_prepare_sender_data_file_s3_unexpected_error_wrapped(self, tmp_path: Path) -> None:
+        """Unexpected S3 download failure is wrapped in StorageError."""
+        config = MagicMock()
+        config.sender_data_file = "s3://bucket/path/data.csv"
+        config.aws_region = "us-east-1"
+        with patch("redwood_dataagent.agent._download_from_s3", side_effect=RuntimeError("network")):
+            with pytest.raises(StorageError, match="Failed to download from S3"):
+                _prepare_sender_data_file(config, tmp_path)
+
+    def test_resolve_configured_file_branches(self, tmp_path: Path) -> None:
+        """Configured-file resolver handles None, missing, non-file, and file paths."""
+        assert _resolve_configured_file(None, "Sender data") is None
+
+        with pytest.raises(StorageError, match="does not exist"):
+            _resolve_configured_file(str(tmp_path / "missing.json"), "Sender data")
+
+        directory_path = tmp_path / "folder"
+        directory_path.mkdir()
+        with pytest.raises(StorageError, match="is not a file"):
+            _resolve_configured_file(str(directory_path), "Sender data")
+
+        source_file = tmp_path / "source.json"
+        source_file.write_text("{}")
+        assert _resolve_configured_file(str(source_file), "Sender data") == source_file
+
+    def test_safe_archive_member_name_rejects_invalid_values(self) -> None:
+        """Archive member validator rejects empty/traversal and absolute paths."""
+        with pytest.raises(StorageError, match="cannot be empty"):
+            _safe_archive_member_name("")
+        with pytest.raises(StorageError, match="Unsafe archive member name"):
+            _safe_archive_member_name("../etc/passwd")
+
+    def test_write_sender_manifest_output_oserror_is_wrapped(self, tmp_path: Path) -> None:
+        """Manifest write OS errors are translated to StorageError."""
+        manifest = MagicMock()
+        manifest.model_dump.return_value = {
+            "files": [],
+            "archive_file": {"file_name": "transfer.tar.gz", "file_size_bytes": 1},
+        }
+        target = tmp_path / "manifest.json"
+
+        with patch("pathlib.Path.open", side_effect=OSError("disk full")):
+            with pytest.raises(StorageError, match="Failed to write sender manifest file"):
+                _write_sender_manifest_output(manifest, target)
+
+    def test_create_sender_query_workflow_branches(self) -> None:
+        """Query workflow covers success, skip, and all failure branches."""
+        config = self._make_sender_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"}}',
+        )
+        contract = MagicMock()
+        contract.template_id = "dot_contract_extract_v1"
+        contract.params = {"schema": "dot", "table": "contract_data"}
+        contract.row_limit = 100
+        contract.timeout_seconds = 30
+
+        success_result = MagicMock()
+        success_result.skipped = False
+        success_result.row_count = 10
+        success_result.file_size_bytes = 100
+        success_result.execution_duration_seconds = 1.2
+        success_result.output_file_path = "s3://bucket/query_mode/outgoing/session-123/out.csv"
+
+        skipped_result = MagicMock()
+        skipped_result.skipped = True
+        skipped_result.query_fingerprint = "abc123"
+        skipped_result.marker_key = "query_mode/processed/x.done"
+
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", side_effect=ConfigurationError("bad payload")), \
+             patch("redwood_dataagent.agent.log_extract_data") as mock_extract, \
+             patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete:
+            _create_sender_query_workflow(config)
+            assert mock_extract.called
+            assert mock_complete.called
+
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", return_value=success_result), \
+             patch("redwood_dataagent.agent.log_extract_data") as mock_extract, \
+             patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete:
+            _create_sender_query_workflow(config)
+            assert mock_extract.call_args.kwargs["outcome"] == EventOutcome.SUCCESS
+            assert mock_complete.call_args.kwargs["outcome"] == EventOutcome.SUCCESS
+
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", return_value=skipped_result), \
+             patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete:
+            _create_sender_query_workflow(config)
+            assert mock_complete.call_args.kwargs["details"]["skipped"] is True
+
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", side_effect=ConfigurationError("cfg")), \
+             patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+            _create_sender_query_workflow(config)
+            assert mock_extract.call_args.kwargs["outcome"] == EventOutcome.FAILURE
+
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", side_effect=StorageError("storage")), \
+             patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+            _create_sender_query_workflow(config)
+            assert mock_extract.call_args.kwargs["outcome"] == EventOutcome.FAILURE
+
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", side_effect=RuntimeError("boom")), \
+             patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+            _create_sender_query_workflow(config)
+            assert "Unexpected error during query execution" in mock_extract.call_args.kwargs["details"]["error"]
+
+    def test_prepare_query_mode_input_branches(self, tmp_path: Path) -> None:
+        """Query input preparation covers skip, unexpected execution error, download error, and success."""
+        config = self._make_sender_config(
+            sender_input_mode="query",
+            sender_query_input_json='{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"}}',
+        )
+        contract = MagicMock()
+        contract.template_id = "dot_contract_extract_v1"
+
+        skipped_result = MagicMock(skipped=True, query_fingerprint="f", marker_key="k")
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", return_value=skipped_result):
+            assert _prepare_query_mode_input(config, tmp_path) is None
+
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", side_effect=RuntimeError("kaboom")):
+            assert _prepare_query_mode_input(config, tmp_path) is None
+
+        result = MagicMock()
+        result.skipped = False
+        result.output_file_path = "not-s3"
+        result.query_fingerprint = "abc"
+        result.row_count = 2
+        result.file_size_bytes = 10
+        result.execution_duration_seconds = 0.3
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", return_value=result):
+            assert _prepare_query_mode_input(config, tmp_path) is None
+
+        good_result = MagicMock()
+        good_result.skipped = False
+        good_result.output_file_path = "s3://bucket/query_mode/outgoing/session-123/results.csv"
+        good_result.query_fingerprint = "abc"
+        good_result.row_count = 2
+        good_result.file_size_bytes = 10
+        good_result.execution_duration_seconds = 0.3
+        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
+             patch("redwood_dataagent.agent.execute_query", return_value=good_result), \
+             patch("redwood_dataagent.agent._download_from_s3") as mock_download:
+            def _download_side_effect(_s3_path: str, destination: Path, _region: str) -> dict[str, object]:
+                destination.write_text("id,name\n1,alpha\n")
+                return {
+                    "data_source": "s3_object",
+                    "s3_bucket": "bucket",
+                    "s3_key": "query_mode/outgoing/session-123/results.csv",
+                    "file_name": destination.name,
+                    "file_size_bytes": destination.stat().st_size,
+                }
+
+            mock_download.side_effect = _download_side_effect
+            prep = _prepare_query_mode_input(config, tmp_path)
+            assert prep is not None
+            mock_download.assert_called_once()
+
+    def test_prepare_file_mode_input_download_failure_raises_storage_error(self, tmp_path: Path) -> None:
+        """File mode input preparation wraps download failures as StorageError."""
+        config = self._make_sender_config()
+        with patch("redwood_dataagent.agent.S3Client") as mock_s3_cls:
+            mock_client = MagicMock()
+            mock_client.download_file.side_effect = RuntimeError("download failed")
+            mock_s3_cls.return_value = mock_client
+
+            with pytest.raises(StorageError, match="Failed to download s3://bucket/file_mode/outgoing/data.json"):
+                _prepare_file_mode_input(config, tmp_path, "s3://bucket/file_mode/outgoing/data.json", "data.json")
+
+    def test_run_sender_transfer_pipeline_failure_branches(self, tmp_path: Path) -> None:
+        """Sender transfer pipeline covers policy-denied, compress failure, and manifest failure branches."""
+        config = self._make_sender_config()
+        staged_file = tmp_path / "data.json"
+        staged_file.write_text('{"id":1}')
+
+        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls:
+            mock_approver = MagicMock()
+            mock_approver.approve_transfer.return_value = False
+            mock_approver_cls.return_value = mock_approver
+            assert _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path) is None
+
+        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls, \
+             patch("redwood_dataagent.agent._compress_sender_data", side_effect=RuntimeError("compress failed")), \
+             patch("redwood_dataagent.agent.log_compress") as mock_log_compress:
+            mock_approver = MagicMock()
+            mock_approver.approve_transfer.return_value = True
+            mock_approver_cls.return_value = mock_approver
+            with pytest.raises(Exception):
+                _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path)
+            assert mock_log_compress.call_args.kwargs["outcome"] == EventOutcome.FAILURE
+
+        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls, \
+             patch("redwood_dataagent.agent._compress_sender_data") as mock_compress, \
+             patch("redwood_dataagent.agent._write_sender_manifest_output", side_effect=RuntimeError("manifest failed")), \
+             patch("redwood_dataagent.agent.log_manifest_created") as mock_manifest_log:
+            mock_approver = MagicMock()
+            mock_approver.approve_transfer.return_value = True
+            mock_approver_cls.return_value = mock_approver
+
+            def _compress_side_effect(archive_path: Path, _staged_file: Path, _name: str) -> None:
+                archive_path.write_bytes(b"archive-bytes")
+
+            mock_compress.side_effect = _compress_side_effect
+            with pytest.raises(Exception):
+                _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path)
+            assert mock_manifest_log.call_args.kwargs["outcome"] == EventOutcome.FAILURE
 
 
 class TestSenderWorkflow:

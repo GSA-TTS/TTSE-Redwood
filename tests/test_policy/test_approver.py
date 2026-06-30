@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import io
+from urllib.error import HTTPError, URLError
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from redwood_dataagent.exceptions import PolicyApprovalError
@@ -146,3 +150,65 @@ class TestPolicyApproverIntegration:
         assert result1 is True
         assert result2 is True
         assert approver1.strict_mode != approver2.strict_mode
+
+
+class TestPolicyHealthProbe:
+    """Tests for policy server health probe logging and resiliency."""
+
+    def test_probe_success_logs_connectivity_validated(self) -> None:
+        """Successful probe logs a success event."""
+        approver = PolicyApprover()
+        mock_logger = MagicMock()
+
+        response = MagicMock()
+        response.status = 200
+        response.read.return_value = b"ok"
+        response_cm = MagicMock()
+        response_cm.__enter__.return_value = response
+        response_cm.__exit__.return_value = False
+
+        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
+             patch("redwood_dataagent.policy.approver.urlopen", return_value=response_cm):
+            approver._probe_policy_server_connectivity("dot")
+
+        assert mock_logger.info.call_count >= 2
+
+    def test_probe_http_error_logs_warning_without_raising(self) -> None:
+        """HTTP failures are logged as warnings and do not raise."""
+        approver = PolicyApprover()
+        mock_logger = MagicMock()
+        http_error = HTTPError(
+            url="https://example.test/health",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,
+            fp=io.BytesIO(b"down"),
+        )
+
+        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
+             patch("redwood_dataagent.policy.approver.urlopen", side_effect=http_error):
+            approver._probe_policy_server_connectivity("dot")
+
+        assert mock_logger.warning.called
+
+    def test_probe_url_error_logs_warning_without_raising(self) -> None:
+        """URLError failures are logged as warnings and do not raise."""
+        approver = PolicyApprover()
+        mock_logger = MagicMock()
+
+        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
+             patch("redwood_dataagent.policy.approver.urlopen", side_effect=URLError("dns error")):
+            approver._probe_policy_server_connectivity("dot")
+
+        assert mock_logger.warning.called
+
+    def test_probe_generic_error_logs_warning_without_raising(self) -> None:
+        """Unexpected probe failures are logged as warnings and do not raise."""
+        approver = PolicyApprover()
+        mock_logger = MagicMock()
+
+        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
+             patch("redwood_dataagent.policy.approver.urlopen", side_effect=RuntimeError("boom")):
+            approver._probe_policy_server_connectivity("dot")
+
+        assert mock_logger.warning.called

@@ -37,7 +37,12 @@ def _get_positive_int_env(name: str, default: int) -> int:
 
     LOGGER.warning(
         "Invalid environment value for transfer tuning; using default",
-        extra={"event": "s3_transfer_env_invalid", "name": name, "value": raw_value, "default": default},
+        extra={
+            "event": "s3_transfer_env_invalid",
+            "env_var": name,
+            "value": raw_value,
+            "default": default,
+        },
     )
     return default
 
