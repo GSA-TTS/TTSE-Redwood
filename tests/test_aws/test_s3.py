@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import builtins
 from pathlib import Path
 from unittest import mock
 
@@ -14,7 +15,7 @@ from redwood_dataagent.exceptions import StorageError
 # Mock boto3 before importing S3Client
 sys.modules["boto3"] = mock.MagicMock()
 
-from redwood_dataagent.aws.s3 import S3Client
+from redwood_dataagent.aws.s3 import S3Client, _get_positive_int_env
 
 
 @pytest.fixture
@@ -58,6 +59,43 @@ class TestS3Client:
         client = S3Client()
         assert client._region == "us-east-1"
         mock_boto3_client.client.assert_called_once_with("s3", region_name="us-east-1")
+
+    def test_s3client_init_raises_when_boto3_missing(self):
+        """Initialization raises clear ImportError when boto3 cannot be imported."""
+        real_import = builtins.__import__
+
+        def _import_fail_boto3(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "boto3":
+                raise ImportError("missing boto3")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with mock.patch("builtins.__import__", side_effect=_import_fail_boto3):
+            with pytest.raises(ImportError, match="boto3 is required"):
+                S3Client()
+
+
+class TestS3TransferTuningEnvParsing:
+    """Tests for transfer tuning env helper parsing behavior."""
+
+    def test_get_positive_int_env_returns_default_when_missing(self):
+        """Missing env var returns default value."""
+        with mock.patch.dict("os.environ", {}, clear=True):
+            assert _get_positive_int_env("SOME_MISSING_ENV", 64) == 64
+
+    def test_get_positive_int_env_returns_default_when_invalid(self):
+        """Invalid non-integer env var returns default value."""
+        with mock.patch.dict("os.environ", {"S3_MULTIPART_THRESHOLD_MB": "not-a-number"}, clear=True):
+            assert _get_positive_int_env("S3_MULTIPART_THRESHOLD_MB", 64) == 64
+
+    def test_get_positive_int_env_returns_default_when_non_positive(self):
+        """Zero/negative env var returns default value."""
+        with mock.patch.dict("os.environ", {"S3_TRANSFER_MAX_CONCURRENCY": "0"}, clear=True):
+            assert _get_positive_int_env("S3_TRANSFER_MAX_CONCURRENCY", 8) == 8
+
+    def test_get_positive_int_env_returns_parsed_value_when_valid(self):
+        """Valid positive integer env var is parsed and returned."""
+        with mock.patch.dict("os.environ", {"S3_TRANSFER_DOWNLOAD_ATTEMPTS": "9"}, clear=True):
+            assert _get_positive_int_env("S3_TRANSFER_DOWNLOAD_ATTEMPTS", 5) == 9
 
 
 class TestS3ClientDownload:

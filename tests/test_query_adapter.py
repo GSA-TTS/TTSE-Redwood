@@ -14,6 +14,8 @@ from redwood_dataagent.config import AgentConfig
 from redwood_dataagent.exceptions import ConfigurationError, StorageError
 from redwood_dataagent.query_adapter import (
     QueryExecutionResult,
+    _apply_bound_filter,
+    _apply_select_fields,
     _build_ibis_query,
     _execute_query_with_timeout,
     _get_ibis_connection,
@@ -110,6 +112,14 @@ class TestGetIbisConnection:
                 mock_ibis.postgres.connect.side_effect = Exception("Connection refused")
 
                 with pytest.raises(ConfigurationError, match="Failed to connect to PostgreSQL"):
+                    _get_ibis_connection("dot")
+
+    def test_get_ibis_connection_missing_required_env_vars_raises_configuration_error(self) -> None:
+        """Missing DB env vars raises a clear ConfigurationError."""
+        with patch.dict("os.environ", {}, clear=True):
+            mock_ibis = MagicMock()
+            with patch("redwood_dataagent.query_adapter.ibis", mock_ibis):
+                with pytest.raises(ConfigurationError, match="Missing required database environment variables"):
                     _get_ibis_connection("dot")
 
 
@@ -294,6 +304,42 @@ class TestBuildIbisQuery:
             with pytest.raises(ConfigurationError, match="must be a dict"):
                 _build_ibis_query(contract)
 
+    def test_build_ibis_query_schema_type_error_without_fallback_hint_raises_configuration_error(self) -> None:
+        """Unexpected TypeError from table lookup is surfaced as ConfigurationError."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={
+                "schema": "dot",
+                "table": "contract_data",
+            },
+        )
+
+        with patch("redwood_dataagent.query_adapter._get_ibis_connection") as mock_get_conn:
+            mock_connection = MagicMock()
+            mock_connection.table.side_effect = TypeError("different error")
+            mock_get_conn.return_value = mock_connection
+
+            with pytest.raises(ConfigurationError, match="Failed to build query"):
+                _build_ibis_query(contract)
+
+    def test_build_ibis_query_table_lookup_error_raises_configuration_error(self) -> None:
+        """Generic table lookup errors become a clear table-not-found ConfigurationError."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={
+                "schema": "dot",
+                "table": "contract_data",
+            },
+        )
+
+        with patch("redwood_dataagent.query_adapter._get_ibis_connection") as mock_get_conn:
+            mock_connection = MagicMock()
+            mock_connection.table.side_effect = RuntimeError("relation missing")
+            mock_get_conn.return_value = mock_connection
+
+            with pytest.raises(ConfigurationError, match="Table 'contract_data' not found in schema 'dot'"):
+                _build_ibis_query(contract)
+
 
 class TestExecuteQueryWithTimeout:
     """Tests for _execute_query_with_timeout()."""
@@ -323,6 +369,47 @@ class TestExecuteQueryWithTimeout:
 
             # Verify alarm was set and then cancelled
             assert mock_signal.alarm.call_count >= 2
+
+    def test_execute_query_with_timeout_list_result_without_to_dict(self) -> None:
+        """Non-dataframe iterable results are converted via list()."""
+        mock_table = MagicMock()
+        mock_table.limit.return_value.execute.return_value = [
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob"},
+        ]
+
+        with patch("redwood_dataagent.query_adapter.signal"):
+            rows = _execute_query_with_timeout(mock_table, timeout_seconds=30, row_limit=100)
+
+        assert len(rows) == 2
+
+    def test_execute_query_with_timeout_raises_storage_error_on_execute_failure(self) -> None:
+        """Unexpected execution failures are wrapped as StorageError."""
+        mock_table = MagicMock()
+        mock_table.limit.return_value.execute.side_effect = RuntimeError("execute failed")
+
+        with patch("redwood_dataagent.query_adapter.signal"):
+            with pytest.raises(StorageError, match="Query execution failed"):
+                _execute_query_with_timeout(mock_table, timeout_seconds=30, row_limit=100)
+
+    def test_execute_query_with_timeout_timeout_handler_path(self) -> None:
+        """SIGALRM handler path raises timeout StorageError."""
+        mock_table = MagicMock()
+        handler_holder: dict[str, object] = {}
+
+        def _signal_side_effect(_sig: int, handler: object) -> object:
+            handler_holder["handler"] = handler
+            return "old_handler"
+
+        def _alarm_side_effect(seconds: int) -> None:
+            if seconds > 0:
+                handler = handler_holder["handler"]
+                handler(14, object())  # type: ignore[operator]
+
+        with patch("redwood_dataagent.query_adapter.signal.signal", side_effect=_signal_side_effect), \
+             patch("redwood_dataagent.query_adapter.signal.alarm", side_effect=_alarm_side_effect):
+            with pytest.raises(StorageError, match="Query execution timeout"):
+                _execute_query_with_timeout(mock_table, timeout_seconds=1, row_limit=10)
 
 
 class TestWriteQueryResultsToFile:
@@ -371,6 +458,14 @@ class TestWriteQueryResultsToFile:
 
         assert file_size > 0
         assert output_file.exists()
+
+    def test_write_query_results_to_file_failure_raises_storage_error(self, tmp_path: Path) -> None:
+        """Write failures are wrapped as StorageError."""
+        output_file = tmp_path / "results.csv"
+
+        with patch.object(Path, "open", side_effect=OSError("permission denied")):
+            with pytest.raises(StorageError, match="Failed to write query results"):
+                _write_query_results_to_file([{"id": 1}], output_file)
 
 
 class TestUploadResultsToS3:
@@ -449,6 +544,74 @@ class TestUploadResultsToS3:
                     "test-session-001",
                     "ce9b55325ce3708377997a21ae44be2b72e0de16aa5f7a9f4234e020f8a7ea07",
                 )
+
+    def test_upload_results_to_s3_raises_when_client_unavailable(self, tmp_path: Path) -> None:
+        """S3Client None branch raises StorageError."""
+        local_file = tmp_path / "results.csv"
+        local_file.write_text("id,name\n1,Alice\n")
+
+        config = AgentConfig(
+            agent_mode="sender",
+            tenant="tts",
+            environment="dev",
+            aws_region="us-east-1",
+            log_level="INFO",
+            transfer_session_id="test-session-001",
+            sender_agency="dot",
+            receiver_agency="",
+            sender_staging_bucket="test-bucket",
+            receiver_landing_bucket="",
+            receiver_target_bucket="",
+            sender_data_directory="s3://test-bucket/scans/",
+            sftp_endpoints=["sftp.example.com"],
+            sftp_username="test-secret",
+        )
+
+        with patch("redwood_dataagent.query_adapter.S3Client", None):
+            with pytest.raises(StorageError, match="S3 client is unavailable"):
+                _upload_results_to_s3(
+                    local_file,
+                    config,
+                    "dot_contract_extract_v1",
+                    "test-session-001",
+                    "ce9b55325ce3708377997a21ae44be2b72e0de16aa5f7a9f4234e020f8a7ea07",
+                )
+
+
+class TestQueryHelperBranches:
+    """Coverage-focused tests for helper error paths."""
+
+    def test_apply_bound_filter_missing_field_raises_configuration_error(self) -> None:
+        """Missing filter field raises clear ConfigurationError."""
+        table = MagicMock()
+        table.__getitem__.side_effect = KeyError("missing")
+
+        with pytest.raises(ConfigurationError, match="does not exist in the table"):
+            _apply_bound_filter(table, "missing", 10, "min")
+
+    def test_apply_bound_filter_unexpected_error_raises_configuration_error(self) -> None:
+        """Unexpected filter evaluation failures are wrapped as ConfigurationError."""
+        table = MagicMock()
+        table.__getitem__.side_effect = RuntimeError("boom")
+
+        with pytest.raises(ConfigurationError, match="Failed to apply min filter"):
+            _apply_bound_filter(table, "amount", 10, "min")
+
+    def test_apply_select_fields_key_error_raises_configuration_error(self) -> None:
+        """Unknown select fields raise ConfigurationError."""
+        table = MagicMock()
+        table.select.side_effect = KeyError("unknown")
+
+        with pytest.raises(ConfigurationError, match="One or more select fields do not exist"):
+            _apply_select_fields(table, ["unknown_field"])
+
+    def test_apply_select_fields_generic_error_raises_configuration_error(self) -> None:
+        """Generic select failure is wrapped as ConfigurationError."""
+        table = MagicMock()
+        table.select.side_effect = RuntimeError("select failed")
+
+        with pytest.raises(ConfigurationError, match="Failed to select fields"):
+            _apply_select_fields(table, ["field_a"])
 
 
 class TestExecuteQuery:
@@ -887,3 +1050,48 @@ class TestAuditEventEmission:
                 assert details["execution_status"] == "skipped"
                 assert details["reason"] == "matching_success_marker_exists"
                 assert result.skipped is True
+
+
+class TestExecuteQueryCleanup:
+    """Tests cleanup branches in execute_query finalization."""
+
+    def test_execute_query_cleanup_errors_are_swallowed(self, tmp_path: Path) -> None:
+        """Exceptions during temp cleanup are ignored and do not fail workflow."""
+        contract = SenderQueryInputContract(
+            template_id="dot_contract_extract_v1",
+            params={"schema": "dot", "table": "contract_data"},
+            row_limit=10,
+            timeout_seconds=30,
+        )
+
+        config = AgentConfig(
+            agent_mode="sender",
+            tenant="tts",
+            environment="dev",
+            aws_region="us-east-1",
+            log_level="INFO",
+            transfer_session_id="test-session-cleanup",
+            sender_agency="dot",
+            receiver_agency="gsa",
+            sender_staging_bucket="test-bucket",
+            receiver_landing_bucket="",
+            receiver_target_bucket="",
+            sender_data_directory="s3://test-bucket/scans/",
+            sftp_endpoints=["sftp.example.com"],
+            sftp_username="test-secret",
+        )
+
+        work_dir = tmp_path / "work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
+             patch("redwood_dataagent.query_adapter._build_ibis_query", return_value=(MagicMock(), 10)), \
+             patch("redwood_dataagent.query_adapter._execute_query_with_timeout", return_value=[{"id": 1}]), \
+             patch("redwood_dataagent.query_adapter._upload_results_to_s3", return_value="query_mode/outgoing/test-session-cleanup/out.csv"), \
+             patch("redwood_dataagent.query_adapter.tempfile.mkdtemp", return_value=str(work_dir)), \
+             patch("pathlib.Path.unlink", side_effect=OSError("unlink failed")), \
+             patch("redwood_dataagent.query_adapter.shutil.rmtree", side_effect=OSError("rmtree failed")):
+            result = execute_query(contract, config)
+
+        assert result.skipped is False
+        assert result.row_count == 1
