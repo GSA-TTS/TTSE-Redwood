@@ -8,34 +8,31 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from redwood_dataagent.audit.events import EventOutcome
 from redwood_dataagent.agent import (
     ALLOWLISTED_QUERY_TEMPLATES,
     _build_file_mode_processed_marker_key,
+    _compute_checksum,
+    _create_receiver_workflow,
     _create_sender_query_workflow,
+    _create_sender_workflow,
+    _download_from_s3,
     _extract_data,
+    _parse_s3_path,
     _prepare_file_mode_input,
     _prepare_query_mode_input,
     _prepare_sender_data_file,
     _resolve_configured_file,
     _run_sender_transfer_pipeline,
     _safe_archive_member_name,
-    _write_sender_manifest_output,
-    _compute_checksum,
-    _create_receiver_workflow,
-    _create_sender_workflow,
-    _download_from_s3,
-    _mark_file_processed,
-    _parse_s3_path,
-    _scan_sender_directory,
     _select_sender_input_mode,
     _validate_sender_query_input_contract,
+    _write_sender_manifest_output,
     run_agent,
 )
+from redwood_dataagent.audit.events import EventOutcome
 from redwood_dataagent.config import AgentConfig
 from redwood_dataagent.exceptions import ConfigurationError, StorageError
 from redwood_dataagent.logging_utils import set_agent_mode, set_transfer_session_id
-from redwood_dataagent.models.manifest import ChecksumAlgorithm
 
 
 class TestComputeChecksum:
@@ -181,9 +178,7 @@ class TestSenderQueryInputContractValidation:
 
     def test_validate_query_input_contract_row_limit_exceeds_template_max_raises(self) -> None:
         """Template-specific row limit cap is enforced."""
-        template_max = int(
-            ALLOWLISTED_QUERY_TEMPLATES["dot_contract_extract_v1"]["max_row_limit"]
-        )
+        template_max = int(ALLOWLISTED_QUERY_TEMPLATES["dot_contract_extract_v1"]["max_row_limit"])
         payload = (
             "{"
             '"template_id":"dot_contract_extract_v1",'
@@ -262,7 +257,10 @@ class TestAgentHelperCoverage:
     def test_build_file_mode_processed_marker_key_variants(self) -> None:
         """Marker key builder supports canonical, embedded, and fallback key shapes."""
         assert _build_file_mode_processed_marker_key("file_mode/outgoing/a.json") == "file_mode/processed/a.json.done"
-        assert _build_file_mode_processed_marker_key("prefix/file_mode/outgoing/a.json") == "prefix/file_mode/processed/a.json.done"
+        assert (
+            _build_file_mode_processed_marker_key("prefix/file_mode/outgoing/a.json")
+            == "prefix/file_mode/processed/a.json.done"
+        )
         assert _build_file_mode_processed_marker_key("misc/a.json") == "file_mode/processed/a.json.done"
 
     def test_extract_data_placeholder_noop(self) -> None:
@@ -346,42 +344,57 @@ class TestAgentHelperCoverage:
         skipped_result.query_fingerprint = "abc123"
         skipped_result.marker_key = "query_mode/processed/x.done"
 
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", side_effect=ConfigurationError("bad payload")), \
-             patch("redwood_dataagent.agent.log_extract_data") as mock_extract, \
-             patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete:
+        with (
+            patch(
+                "redwood_dataagent.agent._validate_sender_query_input_contract",
+                side_effect=ConfigurationError("bad payload"),
+            ),
+            patch("redwood_dataagent.agent.log_extract_data") as mock_extract,
+            patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete,
+        ):
             _create_sender_query_workflow(config)
             assert mock_extract.called
             assert mock_complete.called
 
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", return_value=success_result), \
-             patch("redwood_dataagent.agent.log_extract_data") as mock_extract, \
-             patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete:
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", return_value=success_result),
+            patch("redwood_dataagent.agent.log_extract_data") as mock_extract,
+            patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete,
+        ):
             _create_sender_query_workflow(config)
             assert mock_extract.call_args.kwargs["outcome"] == EventOutcome.SUCCESS
             assert mock_complete.call_args.kwargs["outcome"] == EventOutcome.SUCCESS
 
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", return_value=skipped_result), \
-             patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete:
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", return_value=skipped_result),
+            patch("redwood_dataagent.agent.log_pipeline_complete") as mock_complete,
+        ):
             _create_sender_query_workflow(config)
             assert mock_complete.call_args.kwargs["details"]["skipped"] is True
 
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", side_effect=ConfigurationError("cfg")), \
-             patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", side_effect=ConfigurationError("cfg")),
+            patch("redwood_dataagent.agent.log_extract_data") as mock_extract,
+        ):
             _create_sender_query_workflow(config)
             assert mock_extract.call_args.kwargs["outcome"] == EventOutcome.FAILURE
 
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", side_effect=StorageError("storage")), \
-             patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", side_effect=StorageError("storage")),
+            patch("redwood_dataagent.agent.log_extract_data") as mock_extract,
+        ):
             _create_sender_query_workflow(config)
             assert mock_extract.call_args.kwargs["outcome"] == EventOutcome.FAILURE
 
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", side_effect=RuntimeError("boom")), \
-             patch("redwood_dataagent.agent.log_extract_data") as mock_extract:
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", side_effect=RuntimeError("boom")),
+            patch("redwood_dataagent.agent.log_extract_data") as mock_extract,
+        ):
             _create_sender_query_workflow(config)
             assert "Unexpected error during query execution" in mock_extract.call_args.kwargs["details"]["error"]
 
@@ -395,12 +408,16 @@ class TestAgentHelperCoverage:
         contract.template_id = "dot_contract_extract_v1"
 
         skipped_result = MagicMock(skipped=True, query_fingerprint="f", marker_key="k")
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", return_value=skipped_result):
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", return_value=skipped_result),
+        ):
             assert _prepare_query_mode_input(config, tmp_path) is None
 
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", side_effect=RuntimeError("kaboom")):
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", side_effect=RuntimeError("kaboom")),
+        ):
             assert _prepare_query_mode_input(config, tmp_path) is None
 
         result = MagicMock()
@@ -410,8 +427,10 @@ class TestAgentHelperCoverage:
         result.row_count = 2
         result.file_size_bytes = 10
         result.execution_duration_seconds = 0.3
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", return_value=result):
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", return_value=result),
+        ):
             assert _prepare_query_mode_input(config, tmp_path) is None
 
         good_result = MagicMock()
@@ -421,9 +440,12 @@ class TestAgentHelperCoverage:
         good_result.row_count = 2
         good_result.file_size_bytes = 10
         good_result.execution_duration_seconds = 0.3
-        with patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract), \
-             patch("redwood_dataagent.agent.execute_query", return_value=good_result), \
-             patch("redwood_dataagent.agent._download_from_s3") as mock_download:
+        with (
+            patch("redwood_dataagent.agent._validate_sender_query_input_contract", return_value=contract),
+            patch("redwood_dataagent.agent.execute_query", return_value=good_result),
+            patch("redwood_dataagent.agent._download_from_s3") as mock_download,
+        ):
+
             def _download_side_effect(_s3_path: str, destination: Path, _region: str) -> dict[str, object]:
                 destination.write_text("id,name\n1,alpha\n")
                 return {
@@ -462,20 +484,24 @@ class TestAgentHelperCoverage:
             mock_approver_cls.return_value = mock_approver
             assert _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path) is None
 
-        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls, \
-             patch("redwood_dataagent.agent._compress_sender_data", side_effect=RuntimeError("compress failed")), \
-             patch("redwood_dataagent.agent.log_compress") as mock_log_compress:
+        with (
+            patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls,
+            patch("redwood_dataagent.agent._compress_sender_data", side_effect=RuntimeError("compress failed")),
+            patch("redwood_dataagent.agent.log_compress") as mock_log_compress,
+        ):
             mock_approver = MagicMock()
             mock_approver.approve_transfer.return_value = True
             mock_approver_cls.return_value = mock_approver
-            with pytest.raises(Exception):
+            with pytest.raises(Exception):  # noqa: B017
                 _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path)
             assert mock_log_compress.call_args.kwargs["outcome"] == EventOutcome.FAILURE
 
-        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls, \
-             patch("redwood_dataagent.agent._compress_sender_data") as mock_compress, \
-             patch("redwood_dataagent.agent._write_sender_manifest_output", side_effect=RuntimeError("manifest failed")), \
-             patch("redwood_dataagent.agent.log_manifest_created") as mock_manifest_log:
+        with (
+            patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls,
+            patch("redwood_dataagent.agent._compress_sender_data") as mock_compress,
+            patch("redwood_dataagent.agent._write_sender_manifest_output", side_effect=RuntimeError("manifest failed")),
+            patch("redwood_dataagent.agent.log_manifest_created") as mock_manifest_log,
+        ):
             mock_approver = MagicMock()
             mock_approver.approve_transfer.return_value = True
             mock_approver_cls.return_value = mock_approver
@@ -484,7 +510,7 @@ class TestAgentHelperCoverage:
                 archive_path.write_bytes(b"archive-bytes")
 
             mock_compress.side_effect = _compress_side_effect
-            with pytest.raises(Exception):
+            with pytest.raises(Exception):  # noqa: B017
                 _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path)
             assert mock_manifest_log.call_args.kwargs["outcome"] == EventOutcome.FAILURE
 
@@ -535,25 +561,26 @@ class TestSenderWorkflow:
     def test_sender_workflow_success(self, tmp_path: Path) -> None:
         """Sender workflow completes successfully."""
         config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
-        
+
         # Create a temp file for mocking the download
         test_file = tmp_path / "records.json"
         test_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
-        
+
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._mark_file_processed"):
                 with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
                     mock_client = MagicMock()
                     mock_s3_class.return_value = mock_client
-                    
+
                     # Mock the download_file method to copy our test file
                     def mock_download(bucket, key, dest):
                         import shutil
+
                         shutil.copy2(test_file, dest)
-                    
+
                     mock_client.download_file.side_effect = mock_download
                     mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
-                    
+
                     exit_code = _create_sender_workflow(config)
                     assert exit_code == 0
 
@@ -685,9 +712,7 @@ class TestSenderWorkflow:
         mock_log_compress.assert_called_once()
         mock_log_manifest.assert_called_once()
         manifest_details = mock_log_manifest.call_args.kwargs["details"]
-        assert manifest_details["manifest_path"].startswith(
-            "query_mode/transfers/session-123/"
-        )
+        assert manifest_details["manifest_path"].startswith("query_mode/transfers/session-123/")
         staged_keys = [call.args[2] for call in mock_client.upload_file.call_args_list]
         assert "query_mode/transfers/session-123/transfer.tar.gz" in staged_keys
         assert "query_mode/transfers/session-123/manifest.json" in staged_keys
@@ -759,7 +784,7 @@ class TestSenderWorkflow:
     def test_sender_workflow_with_mock_policy(self, tmp_path: Path) -> None:
         """Sender workflow works with mocked policy approver."""
         config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
-        
+
         # Create a temp file for mocking the download
         test_file = tmp_path / "records.json"
         test_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
@@ -770,14 +795,15 @@ class TestSenderWorkflow:
                     with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_class:
                         mock_client = MagicMock()
                         mock_s3_class.return_value = mock_client
-                        
+
                         def mock_download(bucket, key, dest):
                             import shutil
+
                             shutil.copy2(test_file, dest)
-                        
+
                         mock_client.download_file.side_effect = mock_download
                         mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
-                        
+
                         mock_approver = MagicMock()
                         mock_approver.approve_transfer.return_value = True
                         mock_approver_class.return_value = mock_approver
@@ -789,7 +815,7 @@ class TestSenderWorkflow:
     def test_sender_workflow_uses_sender_provided_data_file(self, tmp_path: Path) -> None:
         """Sender workflow stages a sender-provided source file when configured."""
         config = self._make_config(sender_data_directory="s3://bucket/outgoing/")
-        
+
         # Create a temp file for mocking the download
         test_file = tmp_path / "records.json"
         test_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
@@ -799,14 +825,15 @@ class TestSenderWorkflow:
                 with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
                     mock_client = MagicMock()
                     mock_s3_class.return_value = mock_client
-                    
+
                     def mock_download(bucket, key, dest):
                         import shutil
+
                         shutil.copy2(test_file, dest)
-                    
+
                     mock_client.download_file.side_effect = mock_download
                     mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
-                    
+
                     exit_code = _create_sender_workflow(config)
                     assert exit_code == 0
 
@@ -880,7 +907,9 @@ class TestSenderWorkflow:
                         with patch("redwood_dataagent.agent.log_compress") as mock_compress:
                             with patch("redwood_dataagent.agent.log_manifest_created") as mock_manifest:
                                 with patch("redwood_dataagent.agent.log_sftp_transfer_start") as mock_stage_start:
-                                    with patch("redwood_dataagent.agent.log_sftp_transfer_complete") as mock_stage_complete:
+                                    with patch(
+                                        "redwood_dataagent.agent.log_sftp_transfer_complete"
+                                    ) as mock_stage_complete:
                                         mock_client = MagicMock()
                                         mock_s3_class.return_value = mock_client
 
@@ -890,9 +919,7 @@ class TestSenderWorkflow:
                                             shutil.copy2(test_file, dest)
 
                                         mock_client.download_file.side_effect = mock_download
-                                        mock_scan.return_value = [
-                                            ("s3://bucket/outgoing/records.json", "records.json")
-                                        ]
+                                        mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
 
                                         exit_code = _create_sender_workflow(config)
                                         assert exit_code == 0
@@ -901,9 +928,7 @@ class TestSenderWorkflow:
                                         mock_manifest.assert_called_once()
                                         mock_stage_start.assert_called_once()
                                         mock_stage_complete.assert_called_once()
-                                        staged_keys = [
-                                            call.args[2] for call in mock_client.upload_file.call_args_list
-                                        ]
+                                        staged_keys = [call.args[2] for call in mock_client.upload_file.call_args_list]
                                         assert "file_mode/transfers/session-123/transfer.tar.gz" in staged_keys
                                         assert "file_mode/transfers/session-123/manifest.json" in staged_keys
 
@@ -927,15 +952,12 @@ class TestSenderWorkflow:
 
                         mock_client.download_file.side_effect = mock_download
                         mock_client.upload_file.side_effect = StorageError("staging upload failed")
-                        mock_scan.return_value = [
-                            ("s3://bucket/outgoing/records.json", "records.json")
-                        ]
+                        mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
 
                         exit_code = _create_sender_workflow(config)
                         assert exit_code == 1
 
                         mock_stage_complete.assert_not_called()
-
 
     def test_sender_workflow_sftp_upload_failure_logs_failure_and_returns_error(
         self,
@@ -962,9 +984,7 @@ class TestSenderWorkflow:
                             shutil.copy2(test_file, dest)
 
                         mock_client.download_file.side_effect = mock_download
-                        mock_scan.return_value = [
-                            ("s3://bucket/outgoing/records.json", "records.json")
-                        ]
+                        mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
 
                         exit_code = _create_sender_workflow(config)
                         assert exit_code == 1
@@ -1002,7 +1022,9 @@ class TestReceiverWorkflow:
         defaults.update(kwargs)
         return AgentConfig(**defaults)  # type: ignore
 
-    def _setup_mock_landing(self, mock_landing: MagicMock, session_id: str = "session-456", sender: str = "dot", receiver: str = "gsa") -> None:
+    def _setup_mock_landing(
+        self, mock_landing: MagicMock, session_id: str = "session-456", sender: str = "dot", receiver: str = "gsa"
+    ) -> None:
         """Wire standard mocks for a successful single-transfer receive."""
         mock_landing.list_sender_agencies.return_value = [sender]
         mock_landing.list_pending_transfers.return_value = [session_id]
@@ -1028,7 +1050,8 @@ class TestReceiverWorkflow:
                 mock_store.is_transfer_already_stored.return_value = False
                 self._setup_mock_landing(mock_landing)
                 mock_store.store_to_target.return_value = {
-                    "status": "stored", "file_count": 1,
+                    "status": "stored",
+                    "file_count": 1,
                     "target_location": "s3://target/transfers/session-456/",
                 }
 
@@ -1075,7 +1098,11 @@ class TestReceiverWorkflow:
                 mock_landing.fetch_from_landing_bucket.return_value = (b"archive", {})
                 mock_landing.validate_manifest.side_effect = lambda **kw: make_manifest(kw["sender_agency"])
                 mock_landing.decompress_archive.return_value = {"file_count": 1, "total_bytes": 10}
-                mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
+                mock_store.store_to_target.return_value = {
+                    "status": "stored",
+                    "file_count": 1,
+                    "target_location": "s3://x/",
+                }
 
                 assert _create_receiver_workflow(config) == 0
                 assert mock_landing.list_pending_transfers.call_count == 2
@@ -1109,7 +1136,11 @@ class TestReceiverWorkflow:
                 mock_landing.fetch_from_landing_bucket.side_effect = fetch_side_effect
                 mock_landing.validate_manifest.return_value = ok_manifest
                 mock_landing.decompress_archive.return_value = {"file_count": 1, "total_bytes": 10}
-                mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
+                mock_store.store_to_target.return_value = {
+                    "status": "stored",
+                    "file_count": 1,
+                    "target_location": "s3://x/",
+                }
 
                 assert _create_receiver_workflow(config) == 1
 
@@ -1127,7 +1158,11 @@ class TestReceiverWorkflow:
                         mock_store_cls.return_value = mock_store
                         mock_store.is_transfer_already_stored.return_value = False
                         self._setup_mock_landing(mock_landing)
-                        mock_store.store_to_target.return_value = {"status": "stored", "file_count": 1, "target_location": "s3://x/"}
+                        mock_store.store_to_target.return_value = {
+                            "status": "stored",
+                            "file_count": 1,
+                            "target_location": "s3://x/",
+                        }
 
                         exit_code = _create_receiver_workflow(config)
                         assert exit_code == 0
@@ -1228,7 +1263,9 @@ class TestReceiverWorkflow:
                             assert _create_receiver_workflow(config) == 0
 
         messages = [record.getMessage() for record in caplog.records]
-        assert any("No new files to process. Exiting receiver workflow (idempotent)." in message for message in messages)
+        assert any(
+            "No new files to process. Exiting receiver workflow (idempotent)." in message for message in messages
+        )
         assert not any("already marked done in target" in message for message in messages)
         assert not any("Found 1 transfer session(s)" in message for message in messages)
         assert not any("Receiver scan complete:" in message for message in messages)
@@ -1262,10 +1299,7 @@ class TestReceiverWorkflow:
                             assert _create_receiver_workflow(config) == 0
 
         messages = [record.getMessage() for record in caplog.records]
-        assert any(
-            message == "[receiver][sess-123] Processing transfer from dot"
-            for message in messages
-        )
+        assert any(message == "[receiver][sess-123] Processing transfer from dot" for message in messages)
         set_agent_mode(None)
         set_transfer_session_id(None)
 
@@ -1323,9 +1357,7 @@ class TestReceiverWorkflow:
                             assert _create_receiver_workflow(config) == 0
 
         scan_records = [
-            record
-            for record in caplog.records
-            if getattr(record, "event", None) == "receiver_scan_complete"
+            record for record in caplog.records if getattr(record, "event", None) == "receiver_scan_complete"
         ]
         assert len(scan_records) == 1
 
@@ -1378,28 +1410,29 @@ class TestRunAgent:
         source_file = tmp_path / "records.json"
         source_file.write_text('[{"id": 1, "name": "provided", "value": 1}]')
         config = self._make_config(mode="sender", sender_data_directory="s3://bucket/outgoing/")
-        
+
         with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
             with patch("redwood_dataagent.agent._download_from_s3") as mock_download:
                 with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
                     with patch("redwood_dataagent.agent.create_sftp_client_from_credentials") as mock_sftp_factory:
                         mock_client = MagicMock()
                         mock_s3_class.return_value = mock_client
-                        
+
                         def mock_s3_download(bucket, key, dest):
                             import shutil
+
                             shutil.copy2(source_file, dest)
-                        
+
                         mock_client.download_file.side_effect = mock_s3_download
                         mock_scan.return_value = [("s3://bucket/outgoing/records.json", "records.json")]
-                        
+
                         mock_sftp_client = MagicMock()
                         mock_sftp_factory.return_value = mock_sftp_client
                         mock_sftp_client.upload_file.return_value = {
                             "file_size_bytes": 1024,
                             "endpoint": "sftp.example.com",
                         }
-                        
+
                         assert run_agent(config) == 0
 
     def test_run_agent_receiver_returns_success(self) -> None:
@@ -1432,7 +1465,7 @@ class TestRunAgent:
         """run_agent raises error for invalid agent mode."""
         config = self._make_config(mode="invalid")  # type: ignore
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             run_agent(config)
 
     def test_run_agent_propagates_sender_exit_code(self) -> None:
@@ -1465,9 +1498,7 @@ class TestParseS3Path:
 
     def test_parse_s3_path_valid_complex_key(self) -> None:
         """Parse valid S3 path with complex key including multiple slashes."""
-        bucket, key = _parse_s3_path(
-            "s3://tts-core-dev-dot-data-staging/transfers/sess-001/data.json"
-        )
+        bucket, key = _parse_s3_path("s3://tts-core-dev-dot-data-staging/transfers/sess-001/data.json")
         assert bucket == "tts-core-dev-dot-data-staging"
         assert key == "transfers/sess-001/data.json"
 
@@ -1542,9 +1573,7 @@ class TestDownloadFromS3:
             mock_s3_class.return_value = mock_client
             destination.write_text('{"test": "data"}')
 
-            metadata = _download_from_s3(
-                "s3://bucket/path/file.json", destination, "us-east-1"
-            )
+            metadata = _download_from_s3("s3://bucket/path/file.json", destination, "us-east-1")
 
             assert metadata["data_source"] == "s3_object"
             assert metadata["s3_bucket"] == "bucket"
@@ -1561,11 +1590,9 @@ class TestDownloadFromS3:
             mock_client = MagicMock()
             mock_s3_class.return_value = mock_client
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text('{}')
+            destination.write_text("{}")
 
-            _download_from_s3(
-                "s3://bucket/path/file.json", destination, "us-east-1"
-            )
+            _download_from_s3("s3://bucket/path/file.json", destination, "us-east-1")
 
             # Verify download was called (check invocation count and basic args)
             assert mock_client.download_file.call_count == 1
@@ -1589,9 +1616,7 @@ class TestDownloadFromS3:
             mock_s3_class.return_value = mock_client
 
             with pytest.raises(StorageError, match="Bucket not found"):
-                _download_from_s3(
-                    "s3://bucket/path/file.json", destination, "us-east-1"
-                )
+                _download_from_s3("s3://bucket/path/file.json", destination, "us-east-1")
 
     def test_download_from_s3_uses_aws_region(self, tmp_path: Path) -> None:
         """Download from S3 passes AWS region to S3Client."""
@@ -1600,10 +1625,8 @@ class TestDownloadFromS3:
         with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
             mock_client = MagicMock()
             mock_s3_class.return_value = mock_client
-            destination.write_text('{}')
+            destination.write_text("{}")
 
-            _download_from_s3(
-                "s3://bucket/path/file.json", destination, "us-west-2"
-            )
+            _download_from_s3("s3://bucket/path/file.json", destination, "us-west-2")
 
             mock_s3_class.assert_called_once_with(aws_region="us-west-2")

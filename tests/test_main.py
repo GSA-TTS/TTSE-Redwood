@@ -28,14 +28,16 @@ class TestMainEntrypoint:
 
         mock_logger = MagicMock()
 
-        with patch.object(main_module, "load_config", side_effect=[initial_config, run_config]), \
-             patch.object(main_module, "configure_logging"), \
-             patch.object(main_module, "get_logger", return_value=mock_logger), \
-             patch.object(main_module, "set_agent_mode"), \
-             patch.object(main_module, "set_transfer_session_id"), \
-             patch.object(main_module, "run_agent", return_value=0), \
-             patch.object(main_module.signal, "signal"), \
-             patch.object(main_module.time, "sleep", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(main_module, "load_config", side_effect=[initial_config, run_config]),
+            patch.object(main_module, "configure_logging"),
+            patch.object(main_module, "get_logger", return_value=mock_logger),
+            patch.object(main_module, "set_agent_mode"),
+            patch.object(main_module, "set_transfer_session_id"),
+            patch.object(main_module, "run_agent", return_value=0),
+            patch.object(main_module.signal, "signal"),
+            patch.object(main_module.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
             exit_code = main_module.main()
 
         assert exit_code == 0
@@ -47,14 +49,16 @@ class TestMainEntrypoint:
 
         mock_logger = MagicMock()
 
-        with patch.object(main_module, "load_config", side_effect=[initial_config, run_config]), \
-             patch.object(main_module, "configure_logging"), \
-             patch.object(main_module, "get_logger", return_value=mock_logger), \
-             patch.object(main_module, "set_agent_mode"), \
-             patch.object(main_module, "set_transfer_session_id"), \
-             patch.object(main_module, "run_agent", return_value=7), \
-             patch.object(main_module.signal, "signal"), \
-             patch.object(main_module.time, "sleep", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(main_module, "load_config", side_effect=[initial_config, run_config]),
+            patch.object(main_module, "configure_logging"),
+            patch.object(main_module, "get_logger", return_value=mock_logger),
+            patch.object(main_module, "set_agent_mode"),
+            patch.object(main_module, "set_transfer_session_id"),
+            patch.object(main_module, "run_agent", return_value=7),
+            patch.object(main_module.signal, "signal"),
+            patch.object(main_module.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
             exit_code = main_module.main()
 
         assert exit_code == 0
@@ -62,16 +66,20 @@ class TestMainEntrypoint:
 
     def test_main_returns_one_on_startup_exception(self) -> None:
         """Unhandled startup errors return non-zero exit code."""
-        with patch.object(main_module, "load_config", side_effect=RuntimeError("boom")), \
-             patch.object(main_module, "get_logger", return_value=MagicMock()):
+        with (
+            patch.object(main_module, "load_config", side_effect=RuntimeError("boom")),
+            patch.object(main_module, "get_logger", return_value=MagicMock()),
+        ):
             exit_code = main_module.main()
 
         assert exit_code == 1
 
     def test_main_returns_one_when_logger_is_unavailable_in_error_path(self) -> None:
         """Fatal-path logger acquisition failure is swallowed and still returns 1."""
-        with patch.object(main_module, "load_config", side_effect=RuntimeError("boom")), \
-             patch.object(main_module, "get_logger", side_effect=RuntimeError("logger unavailable")):
+        with (
+            patch.object(main_module, "load_config", side_effect=RuntimeError("boom")),
+            patch.object(main_module, "get_logger", side_effect=RuntimeError("logger unavailable")),
+        ):
             exit_code = main_module.main()
 
         assert exit_code == 1
@@ -92,14 +100,16 @@ class TestMainEntrypoint:
             assert handler is not None
             handler(15, object())
 
-        with patch.object(main_module, "load_config", side_effect=[initial_config, run_config]), \
-             patch.object(main_module, "configure_logging"), \
-             patch.object(main_module, "get_logger", return_value=mock_logger), \
-             patch.object(main_module, "set_agent_mode"), \
-             patch.object(main_module, "set_transfer_session_id"), \
-             patch.object(main_module, "run_agent", return_value=0), \
-             patch.object(main_module.signal, "signal", side_effect=_signal_side_effect), \
-             patch.object(main_module.time, "sleep", side_effect=_sleep_side_effect):
+        with (
+            patch.object(main_module, "load_config", side_effect=[initial_config, run_config]),
+            patch.object(main_module, "configure_logging"),
+            patch.object(main_module, "get_logger", return_value=mock_logger),
+            patch.object(main_module, "set_agent_mode"),
+            patch.object(main_module, "set_transfer_session_id"),
+            patch.object(main_module, "run_agent", return_value=0),
+            patch.object(main_module.signal, "signal", side_effect=_signal_side_effect),
+            patch.object(main_module.time, "sleep", side_effect=_sleep_side_effect),
+        ):
             exit_code = main_module.main()
 
         assert exit_code == 0

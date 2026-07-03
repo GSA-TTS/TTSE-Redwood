@@ -10,9 +10,10 @@ This module tests:
 - Consistency with Pydantic AuditEvent model
 """
 
+from datetime import UTC, datetime
+from unittest.mock import patch
+
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
 
 from redwood_dataagent.audit.events import (
     AuditEvent,
@@ -20,18 +21,18 @@ from redwood_dataagent.audit.events import (
     EventOutcome,
 )
 from redwood_dataagent.audit.logger import (
-    log_event,
-    log_pipeline_start,
-    log_extract_data,
-    log_policy_check,
     log_compress,
-    log_manifest_created,
-    log_sftp_transfer_start,
-    log_sftp_transfer_complete,
-    log_validate_manifest,
     log_decompress,
-    log_store_data,
+    log_event,
+    log_extract_data,
+    log_manifest_created,
     log_pipeline_complete,
+    log_pipeline_start,
+    log_policy_check,
+    log_sftp_transfer_complete,
+    log_sftp_transfer_start,
+    log_store_data,
+    log_validate_manifest,
 )
 from redwood_dataagent.logging_utils import set_agent_mode
 
@@ -125,7 +126,7 @@ class TestCoreLogEvent:
 
     def test_log_event_timestamp_is_utc(self):
         """Test that event timestamp is in UTC."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         event = log_event(
             event_type=AuditEventType.COMPRESS,
             transfer_session_id="transfer-006",
@@ -133,10 +134,10 @@ class TestCoreLogEvent:
             receiver_agency="gsa",
             stage="sender",
         )
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
 
         assert before <= event.timestamp <= after
-        assert event.timestamp.tzinfo == timezone.utc
+        assert event.timestamp.tzinfo == UTC
 
     def test_log_event_validates_empty_transfer_session_id(self):
         """Test that empty transfer_session_id raises ValidationError."""

@@ -14,9 +14,7 @@ from urllib.request import Request, urlopen
 from ..exceptions import PolicyApprovalError
 from ..logging_utils import get_logger, prefix_log_message
 
-DEFAULT_POLICY_HEALTHCHECK_URL = (
-    "https://everglades.dev.tts.mcaas.fcs.gsa.gov/health"
-)
+DEFAULT_POLICY_HEALTHCHECK_URL = "https://everglades.dev.tts.mcaas.fcs.gsa.gov/health"
 DEFAULT_POLICY_HEALTHCHECK_TIMEOUT_SECONDS = 5
 POLICY_HEALTH_PROBE_FAILED_MESSAGE = "Policy server health probe failed"
 
@@ -74,9 +72,7 @@ class PolicyApprover:
         if not agency or not agency.strip():
             raise PolicyApprovalError("Agency cannot be blank")
         if file_count < 1:
-            raise PolicyApprovalError(
-                f"File count must be at least 1, got {file_count}"
-            )
+            raise PolicyApprovalError(f"File count must be at least 1, got {file_count}")
 
         # Day 1 MVP: Always approve (no policy restrictions)
         # Phase 2: Replace with real policy decision logic

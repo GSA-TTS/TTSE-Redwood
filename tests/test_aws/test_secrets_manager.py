@@ -13,15 +13,9 @@ from redwood_dataagent.exceptions import SecretsManagerError
 def _attach_secrets_manager_exception_types(mock_client: mock.MagicMock) -> None:
     """Attach boto-like exception classes to a mocked Secrets Manager client."""
     mock_client.exceptions = mock.MagicMock()
-    mock_client.exceptions.ResourceNotFoundException = type(
-        "ResourceNotFoundException", (Exception,), {}
-    )
-    mock_client.exceptions.InvalidRequestException = type(
-        "InvalidRequestException", (Exception,), {}
-    )
-    mock_client.exceptions.InvalidParameterException = type(
-        "InvalidParameterException", (Exception,), {}
-    )
+    mock_client.exceptions.ResourceNotFoundException = type("ResourceNotFoundException", (Exception,), {})
+    mock_client.exceptions.InvalidRequestException = type("InvalidRequestException", (Exception,), {})
+    mock_client.exceptions.InvalidParameterException = type("InvalidParameterException", (Exception,), {})
 
 
 class TestSecretsManagerClientInit:
@@ -55,9 +49,7 @@ class TestSecretsManagerClientGetJsonSecret:
         mock_client = mock.MagicMock()
         _attach_secrets_manager_exception_types(mock_client)
         secret_content = '{"user": "sender", "private-key": "-----BEGIN RSA-----"}'
-        mock_client.get_secret_value.return_value = {
-            "SecretString": secret_content
-        }
+        mock_client.get_secret_value.return_value = {"SecretString": secret_content}
         mock_boto3_client.return_value = mock_client
 
         client = SecretsManagerClient()
@@ -73,9 +65,7 @@ class TestSecretsManagerClientGetJsonSecret:
         mock_client = mock.MagicMock()
         _attach_secrets_manager_exception_types(mock_client)
         secret_content = b'{"user": "sender", "private-key": "key"}'
-        mock_client.get_secret_value.return_value = {
-            "SecretBinary": secret_content
-        }
+        mock_client.get_secret_value.return_value = {"SecretBinary": secret_content}
         mock_boto3_client.return_value = mock_client
 
         client = SecretsManagerClient()
@@ -89,9 +79,7 @@ class TestSecretsManagerClientGetJsonSecret:
         """Test retrieval fails on invalid JSON."""
         mock_client = mock.MagicMock()
         _attach_secrets_manager_exception_types(mock_client)
-        mock_client.get_secret_value.return_value = {
-            "SecretString": "not valid json {"
-        }
+        mock_client.get_secret_value.return_value = {"SecretString": "not valid json {"}
         mock_boto3_client.return_value = mock_client
 
         client = SecretsManagerClient()

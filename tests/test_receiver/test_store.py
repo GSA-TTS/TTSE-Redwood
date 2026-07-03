@@ -181,8 +181,7 @@ class TestReceiverTargetStoreIdempotency:
 
         # Verify head_object was called with correct marker key
         receiver_target_store.s3_client._client.head_object.assert_called_once_with(
-            Bucket="tts-core-dev-gsa-data-target",
-            Key="processed/dot/transfer-20260407-001.done"
+            Bucket="tts-core-dev-gsa-data-target", Key="processed/dot/transfer-20260407-001.done"
         )
 
 

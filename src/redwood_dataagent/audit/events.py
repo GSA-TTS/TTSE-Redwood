@@ -10,11 +10,11 @@ validation, and JSON serialization. This module contains ONLY event definitions,
 not emission logic (see audit/logger.py or __init__.py for event emission).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AuditEventType(str, Enum):
@@ -101,32 +101,27 @@ class AuditEvent(BaseModel):
                 "outcome": "success",
                 "destination_host": None,
                 "bytes_transferred": None,
-                "details": {"agent_mode": "sender", "environment": "dev"}
+                "details": {"agent_mode": "sender", "environment": "dev"},
             }
         }
     )
 
     event_type: AuditEventType = Field(..., description="Type of audit event")
-    transfer_session_id: str = Field(
-        ..., min_length=1, description="Correlation ID for end-to-end tracing"
-    )
+    transfer_session_id: str = Field(..., min_length=1, description="Correlation ID for end-to-end tracing")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        description="UTC timestamp when event occurred"
+        default_factory=lambda: datetime.now(UTC), description="UTC timestamp when event occurred"
     )
-    sender_agency: str = Field(default="", description="Sending agency code (empty when receiver pod does not know the sender)")
-    receiver_agency: str = Field(default="", description="Receiving agency code (empty when sender pod does not know the receiver)")
+    sender_agency: str = Field(
+        default="", description="Sending agency code (empty when receiver pod does not know the sender)"
+    )
+    receiver_agency: str = Field(
+        default="", description="Receiving agency code (empty when sender pod does not know the receiver)"
+    )
     stage: str = Field(..., description="Pipeline stage (sender, transfer, receiver)")
     outcome: EventOutcome = Field(..., description="Operation outcome")
-    destination_host: Optional[str] = Field(
-        None, description="SFTP server hostname (transfer stage events)"
-    )
-    bytes_transferred: Optional[int] = Field(
-        None, ge=0, description="Bytes transferred (transfer stage events)"
-    )
-    details: Optional[Dict[str, Any]] = Field(
-        None, description="Additional event context (extensible)"
-    )
+    destination_host: str | None = Field(None, description="SFTP server hostname (transfer stage events)")
+    bytes_transferred: int | None = Field(None, ge=0, description="Bytes transferred (transfer stage events)")
+    details: dict[str, Any] | None = Field(None, description="Additional event context (extensible)")
 
     @field_validator("transfer_session_id")
     @classmethod
@@ -136,7 +131,7 @@ class AuditEvent(BaseModel):
             raise ValueError("transfer_session_id cannot be empty")
         return v
 
-    def to_structured_log(self) -> Dict[str, Any]:
+    def to_structured_log(self) -> dict[str, Any]:
         """
         Convert audit event to structured logging format.
 
@@ -157,5 +152,5 @@ class AuditEvent(BaseModel):
             "outcome": self.outcome.value,
             "destination_host": self.destination_host,
             "bytes_transferred": self.bytes_transferred,
-            "details": self.details or {}
+            "details": self.details or {},
         }

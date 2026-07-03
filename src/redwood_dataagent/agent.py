@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Agent runtime entrypoints for the Redwood MVP foundation.
 
 The agent module implements the core sender and receiver workflows for Day 1 MVP:
@@ -9,15 +7,18 @@ The agent module implements the core sender and receiver workflows for Day 1 MVP
 Both workflows include comprehensive audit logging and error handling.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import shutil
 import tarfile
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -38,7 +39,6 @@ from .exceptions import (
     ConfigurationError,
     StorageError,
 )
-from .query_adapter import execute_query
 from .logging_utils import get_logger, logging_context, prefix_log_message
 from .models.manifest import (
     ChecksumAlgorithm,
@@ -48,6 +48,7 @@ from .models.manifest import (
     apply_archive_field_naming,
 )
 from .policy import PolicyApprover
+from .query_adapter import execute_query
 from .query_templates import ALLOWLISTED_QUERY_TEMPLATES
 from .receiver.landing import ReceiverLandingZone
 from .receiver.store import ReceiverTargetStore
@@ -119,9 +120,7 @@ def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: 
                     },
                 )
 
-    raise StorageError(
-        f"{operation_name} failed after {attempts} attempts: {last_error}"
-    ) from last_error
+    raise StorageError(f"{operation_name} failed after {attempts} attempts: {last_error}") from last_error
 
 
 # Sender file-mode helpers
@@ -165,23 +164,17 @@ def _validate_sender_query_input_contract(
         When payload is missing, malformed, not allow-listed, or missing required params.
     """
     if not raw_contract_json or not raw_contract_json.strip():
-        raise ConfigurationError(
-            "SENDER_QUERY_INPUT_JSON is required when SENDER_INPUT_MODE=query"
-        )
+        raise ConfigurationError("SENDER_QUERY_INPUT_JSON is required when SENDER_INPUT_MODE=query")
 
     try:
         payload = json.loads(raw_contract_json)
     except json.JSONDecodeError as exc:
-        raise ConfigurationError(
-            f"SENDER_QUERY_INPUT_JSON must be valid JSON: {exc}"
-        ) from exc
+        raise ConfigurationError(f"SENDER_QUERY_INPUT_JSON must be valid JSON: {exc}") from exc
 
     try:
         contract = SenderQueryInputContract.model_validate(payload)
     except ValidationError as exc:
-        raise ConfigurationError(
-            f"Invalid query input contract: {exc}"
-        ) from exc
+        raise ConfigurationError(f"Invalid query input contract: {exc}") from exc
 
     template_spec = ALLOWLISTED_QUERY_TEMPLATES.get(contract.template_id)
     if template_spec is None:
@@ -198,16 +191,12 @@ def _validate_sender_query_input_contract(
         if (
             param_name not in contract.params
             or contract.params[param_name] is None
-            or (
-                isinstance(contract.params[param_name], str)
-                and not contract.params[param_name].strip()
-            )
+            or (isinstance(contract.params[param_name], str) and not contract.params[param_name].strip())
         )
     )
     if missing_required_params:
         raise ConfigurationError(
-            "Missing required query params for template "
-            f"'{contract.template_id}': {missing_required_params}"
+            "Missing required query params for template " f"'{contract.template_id}': {missing_required_params}"
         )
 
     template_max_row_limit = int(template_spec.get("max_row_limit", max_query_row_limit))
@@ -218,12 +207,8 @@ def _validate_sender_query_input_contract(
             f"{effective_max_row_limit} for template '{contract.template_id}'"
         )
 
-    template_max_timeout_seconds = int(
-        template_spec.get("max_timeout_seconds", max_query_timeout_seconds)
-    )
-    effective_max_timeout_seconds = min(
-        template_max_timeout_seconds, max_query_timeout_seconds
-    )
+    template_max_timeout_seconds = int(template_spec.get("max_timeout_seconds", max_query_timeout_seconds))
+    effective_max_timeout_seconds = min(template_max_timeout_seconds, max_query_timeout_seconds)
     if contract.timeout_seconds > effective_max_timeout_seconds:
         raise ConfigurationError(
             f"timeout_seconds {contract.timeout_seconds} exceeds allow-listed template max "
@@ -300,7 +285,6 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
         return
 
     try:
-
         LOGGER.info(
             prefix_log_message(
                 "Validated sender query input contract",
@@ -511,7 +495,6 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
         )
         return
 
-
     # Shared sender workflow helpers
 
 
@@ -560,33 +543,31 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
     try:
         parsed = _parse_s3_path(directory_path)
         if parsed is None:
-            raise StorageError(
-                f"Sender directory must be an S3 path, got: {directory_path}"
-            )
+            raise StorageError(f"Sender directory must be an S3 path, got: {directory_path}")
 
         bucket, prefix = parsed
         client = S3Client(aws_region=aws_region)
-        
+
         # List objects in the configured sender scan directory
         response = client._client.list_objects_v2(Bucket=bucket, Prefix=prefix)
         files = []
-        
+
         if "Contents" not in response:
             return []
-        
+
         for obj in response["Contents"]:
             key = obj["Key"]
             # Skip if it's the prefix itself or is a directory marker
             if key == prefix or key.endswith("/"):
                 continue
-            
+
             file_name = Path(key).name
-            
+
             # Skip if this is a marker file (.done files should not be processed)
             if file_name.endswith(DONE_MARKER_SUFFIX):
                 LOGGER.debug(f"Skipping marker file: {key}")
                 continue
-            
+
             # Check if file has been processed (marker exists in processed/)
             processed_marker_key = _build_file_mode_processed_marker_key(key)
             try:
@@ -596,10 +577,10 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
             except Exception:
                 # Marker doesn't exist, file is ready to process
                 pass
-            
+
             s3_path = f"s3://{bucket}/{key}"
             files.append((s3_path, file_name))
-        
+
         return files
     except Exception as e:
         raise StorageError(f"Failed to scan sender directory: {e}") from e
@@ -625,13 +606,11 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
     try:
         parsed = _parse_s3_path(directory_path)
         if parsed is None:
-            raise StorageError(
-                f"Sender directory must be an S3 path, got: {directory_path}"
-            )
+            raise StorageError(f"Sender directory must be an S3 path, got: {directory_path}")
 
         bucket, prefix = parsed
         client = S3Client(aws_region=aws_region)
-        
+
         # Create marker in file-mode processed directory using absolute path.
         if not prefix.endswith("/"):
             prefix = f"{prefix}/"
@@ -642,12 +621,12 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
             1,
         )
         marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(UTC).isoformat()
         marker_metadata = {
             "processed_at": timestamp,
             "original_file": file_name,
         }
-        
+
         client._client.put_object(
             Bucket=bucket,
             Key=marker_key,
@@ -696,9 +675,7 @@ def _parse_s3_path(path: str) -> tuple[str, str] | None:
     raise StorageError(f"Invalid S3 path format: {path}. Expected: s3://bucket/key")
 
 
-def _download_from_s3(
-    s3_path: str, destination_path: Path, aws_region: str
-) -> dict[str, Any]:
+def _download_from_s3(s3_path: str, destination_path: Path, aws_region: str) -> dict[str, Any]:
     """Download a file from S3 to container filesystem (S3 → container).
 
     Helper to fetch sender's data file from sender-side S3 storage into
@@ -730,10 +707,10 @@ def _download_from_s3(
         If S3 download fails (bucket not found, object not found, access denied, etc)
     """
     bucket, key = _parse_s3_path(s3_path)
-    
+
     client = S3Client(aws_region=aws_region)
     client.download_file(bucket, key, destination_path)
-    
+
     return {
         "data_source": "s3_object",
         "s3_bucket": bucket,
@@ -889,7 +866,7 @@ def _compute_checksum(file_path: Path, algorithm: ChecksumAlgorithm = DEFAULT_CH
             for chunk in iter(lambda: file_obj.read(8192), b""):
                 hash_obj.update(chunk)
     except OSError as e:
-        raise StorageError(f"Failed to read file {file_path}: {e}")
+        raise StorageError(f"Failed to read file {file_path}: {e}") from e
 
     return hash_obj.hexdigest()
 
@@ -1096,10 +1073,7 @@ def _prepare_query_mode_input(config: AgentConfig, tmpdir_path: Path) -> SenderI
     try:
         parsed_output = _parse_s3_path(query_result.output_file_path)
         if parsed_output is None:
-            raise StorageError(
-                "Query output path must be an S3 URL, got: "
-                f"{query_result.output_file_path}"
-            )
+            raise StorageError("Query output path must be an S3 URL, got: " f"{query_result.output_file_path}")
 
         _bucket, output_key = parsed_output
         file_name = Path(output_key).name
@@ -1380,7 +1354,9 @@ def _run_sender_transfer_pipeline(
         try:
             upload_metadata = _retry_operation(
                 "sftp_upload",
-                lambda artifact_path=artifact_path, remote_path=remote_path: sftp_client.upload_file(artifact_path, remote_path),
+                lambda artifact_path=artifact_path, remote_path=remote_path: sftp_client.upload_file(
+                    artifact_path, remote_path
+                ),
             )
         except Exception as e:
             log_sftp_transfer_complete(
@@ -1615,8 +1591,8 @@ def _compress_sender_data(archive_path: Path, staged_file: Path, archive_member_
 
 
 def _process_single_receiver_transfer(
-    landing_zone: "ReceiverLandingZone",
-    target_store: "ReceiverTargetStore",
+    landing_zone: ReceiverLandingZone,
+    target_store: ReceiverTargetStore,
     config: AgentConfig,
     sender_agency: str,
     transfer_session_id: str,
@@ -1721,8 +1697,8 @@ def _process_single_receiver_transfer(
 
 
 def _process_discovered_receiver_transfer(
-    landing_zone: "ReceiverLandingZone",
-    target_store: "ReceiverTargetStore",
+    landing_zone: ReceiverLandingZone,
+    target_store: ReceiverTargetStore,
     config: AgentConfig,
     sender_agency: str,
     transfer_session_id: str,
@@ -1886,8 +1862,7 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
                 reverse=True,
             )[:3]
             recent_already_processed_refs = [
-                f"{item['sender_agency']}/{item['transfer_session_id']}"
-                for item in recent_already_processed
+                f"{item['sender_agency']}/{item['transfer_session_id']}" for item in recent_already_processed
             ]
 
             LOGGER.info(
@@ -1965,7 +1940,4 @@ def run_agent(config: AgentConfig) -> int:
     elif config.agent_mode == "receiver":
         return _create_receiver_workflow(config)
     else:
-        raise ConfigurationError(
-            f"Invalid agent mode: {config.agent_mode}. "
-            f"Must be 'sender' or 'receiver'."
-        )
+        raise ConfigurationError(f"Invalid agent mode: {config.agent_mode}. " f"Must be 'sender' or 'receiver'.")

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+
 import pytest
 
 from redwood_dataagent.logging_utils import (
     JsonFormatter,
     _agent_mode,
+    _transfer_session_id,
     configure_logging,
     get_agent_mode,
     get_logger,
@@ -17,7 +19,6 @@ from redwood_dataagent.logging_utils import (
     prefix_log_message,
     set_agent_mode,
     set_transfer_session_id,
-    _transfer_session_id,
 )
 
 
@@ -282,10 +283,7 @@ class TestPrefixLogMessage:
         set_agent_mode("receiver")
         set_transfer_session_id("session-123")
 
-        assert (
-            prefix_log_message("Processing transfer")
-            == "[receiver][session-123] Processing transfer"
-        )
+        assert prefix_log_message("Processing transfer") == "[receiver][session-123] Processing transfer"
 
     def test_prefix_log_message_accepts_explicit_values(self):
         """Prefix helper supports explicit values without relying on context."""
@@ -454,7 +452,7 @@ class TestIntegration:
         """Verify logging_context properly restores state on exception."""
         set_transfer_session_id("original")
 
-        class CustomException(Exception):
+        class CustomException(Exception):  # noqa: N818
             pass
 
         try:

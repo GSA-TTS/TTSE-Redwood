@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """Environment-driven configuration for the Redwood Data Agent."""
+
+from __future__ import annotations
 
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .exceptions import ConfigurationError
 from .storage.conventions import (
@@ -14,7 +14,6 @@ from .storage.conventions import (
     build_receiver_bucket,
     build_sender_bucket,
 )
-
 
 VALID_AGENT_MODES = {"sender", "receiver"}
 DEFAULT_MAX_QUERY_ROW_LIMIT = 1_000_000
@@ -27,7 +26,7 @@ def _load_transfer_session_id() -> str:
     if configured_session_id:
         return configured_session_id
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     session_uuid = str(uuid.uuid4())[:8]
     return f"{timestamp}-{session_uuid}"
 
@@ -41,8 +40,7 @@ def _load_sender_sftp_settings() -> tuple[list[str], str, str]:
     sftp_endpoints = [ep.strip() for ep in sftp_endpoints_str.split(",")]
     if any(not ep for ep in sftp_endpoints):
         raise ConfigurationError(
-            "SFTP_ENDPOINTS contains empty values (including whitespace-only entries): "
-            f"{sftp_endpoints_str}"
+            "SFTP_ENDPOINTS contains empty values (including whitespace-only entries): " f"{sftp_endpoints_str}"
         )
 
     sftp_username = os.getenv("SFTP_USERNAME", "").strip()
@@ -64,20 +62,12 @@ def _resolve_mode_storage_paths(
 ) -> tuple[str, str, str, str]:
     """Build mode-specific bucket names and sender data directory."""
     if agent_mode == "sender":
-        sender_staging_bucket = build_sender_bucket(
-            sender_agency, environment, StoragePurpose.STAGING
-        )
-        sender_data_directory = (
-            f"s3://{sender_staging_bucket}/{FileModeStoragePath.scan_prefix()}"
-        )
+        sender_staging_bucket = build_sender_bucket(sender_agency, environment, StoragePurpose.STAGING)
+        sender_data_directory = f"s3://{sender_staging_bucket}/{FileModeStoragePath.scan_prefix()}"
         return sender_staging_bucket, sender_data_directory, "", ""
 
-    receiver_landing_bucket = build_receiver_bucket(
-        receiver_agency, environment, "landing"
-    )
-    receiver_target_bucket = build_receiver_bucket(
-        receiver_agency, environment, "target"
-    )
+    receiver_landing_bucket = build_receiver_bucket(receiver_agency, environment, "landing")
+    receiver_target_bucket = build_receiver_bucket(receiver_agency, environment, "target")
     return "", "", receiver_landing_bucket, receiver_target_bucket
 
 
@@ -90,14 +80,10 @@ def _load_positive_int_env(var_name: str, default_value: int) -> int:
     try:
         parsed_value = int(raw_value)
     except ValueError as exc:
-        raise ConfigurationError(
-            f"{var_name} must be a positive integer, got '{raw_value}'"
-        ) from exc
+        raise ConfigurationError(f"{var_name} must be a positive integer, got '{raw_value}'") from exc
 
     if parsed_value < 1:
-        raise ConfigurationError(
-            f"{var_name} must be >= 1, got '{raw_value}'"
-        )
+        raise ConfigurationError(f"{var_name} must be >= 1, got '{raw_value}'")
 
     return parsed_value
 
@@ -109,7 +95,7 @@ class AgentConfig:
     All bucket names are derived at load time from agency and environment values
     using the storage naming conventions, so callers never construct bucket names
     themselves.
-    
+
     SFTP endpoints and credentials are loaded from environment variables.
     """
 
@@ -203,9 +189,7 @@ def load_config() -> AgentConfig:
     """
     agent_mode = os.getenv("AGENT_MODE", "receiver").strip().lower()
     if agent_mode not in VALID_AGENT_MODES:
-        raise ConfigurationError(
-            f"AGENT_MODE must be one of {sorted(VALID_AGENT_MODES)}, got '{agent_mode}'"
-        )
+        raise ConfigurationError(f"AGENT_MODE must be one of {sorted(VALID_AGENT_MODES)}, got '{agent_mode}'")
 
     agency = os.getenv("AGENCY", "").strip().lower()
     if not agency:
@@ -259,9 +243,7 @@ def load_config() -> AgentConfig:
         sftp_private_key=sftp_private_key,
         sender_input_mode=os.getenv("SENDER_INPUT_MODE", ""),
         sender_query_input_json=os.getenv("SENDER_QUERY_INPUT_JSON", ""),
-        max_query_row_limit=_load_positive_int_env(
-            "MAX_QUERY_ROW_LIMIT", DEFAULT_MAX_QUERY_ROW_LIMIT
-        ),
+        max_query_row_limit=_load_positive_int_env("MAX_QUERY_ROW_LIMIT", DEFAULT_MAX_QUERY_ROW_LIMIT),
         max_query_timeout_seconds=_load_positive_int_env(
             "MAX_QUERY_TIMEOUT_SECONDS", DEFAULT_MAX_QUERY_TIMEOUT_SECONDS
         ),
