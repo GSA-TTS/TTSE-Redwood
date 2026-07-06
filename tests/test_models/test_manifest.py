@@ -7,7 +7,7 @@ These tests focus on the receiver contract guarantees for Day 1:
 - stable JSON-ready serialization for downstream logging/transport
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -96,7 +96,7 @@ class TestTransferManifest:
 
     def test_timestamp_defaults_to_now(self):
         """Set created_at automatically to current UTC time when omitted."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         manifest = TransferManifest(
             transfer_session_id="transfer-20260325-001",
             sender_agency="dot",
@@ -110,7 +110,7 @@ class TestTransferManifest:
                 )
             ],
         )
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
 
         assert before <= manifest.created_at <= after
 

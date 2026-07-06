@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import io
-from urllib.error import HTTPError, URLError
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -167,8 +167,10 @@ class TestPolicyHealthProbe:
         response_cm.__enter__.return_value = response
         response_cm.__exit__.return_value = False
 
-        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
-             patch("redwood_dataagent.policy.approver.urlopen", return_value=response_cm):
+        with (
+            patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger),
+            patch("redwood_dataagent.policy.approver.urlopen", return_value=response_cm),
+        ):
             approver._probe_policy_server_connectivity("dot")
 
         assert mock_logger.info.call_count >= 2
@@ -185,8 +187,10 @@ class TestPolicyHealthProbe:
             fp=io.BytesIO(b"down"),
         )
 
-        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
-             patch("redwood_dataagent.policy.approver.urlopen", side_effect=http_error):
+        with (
+            patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger),
+            patch("redwood_dataagent.policy.approver.urlopen", side_effect=http_error),
+        ):
             approver._probe_policy_server_connectivity("dot")
 
         assert mock_logger.warning.called
@@ -196,8 +200,10 @@ class TestPolicyHealthProbe:
         approver = PolicyApprover()
         mock_logger = MagicMock()
 
-        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
-             patch("redwood_dataagent.policy.approver.urlopen", side_effect=URLError("dns error")):
+        with (
+            patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger),
+            patch("redwood_dataagent.policy.approver.urlopen", side_effect=URLError("dns error")),
+        ):
             approver._probe_policy_server_connectivity("dot")
 
         assert mock_logger.warning.called
@@ -207,8 +213,10 @@ class TestPolicyHealthProbe:
         approver = PolicyApprover()
         mock_logger = MagicMock()
 
-        with patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger), \
-             patch("redwood_dataagent.policy.approver.urlopen", side_effect=RuntimeError("boom")):
+        with (
+            patch("redwood_dataagent.policy.approver.get_logger", return_value=mock_logger),
+            patch("redwood_dataagent.policy.approver.urlopen", side_effect=RuntimeError("boom")),
+        ):
             approver._probe_policy_server_connectivity("dot")
 
         assert mock_logger.warning.called

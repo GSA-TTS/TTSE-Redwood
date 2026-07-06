@@ -52,16 +52,15 @@ Structured logging complements audit events with additional context for operator
 
 from __future__ import annotations
 
-import hashlib
 import csv
-import io
+import hashlib
 import json
 import shutil
 import signal
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -88,6 +87,8 @@ if TYPE_CHECKING:
 LOGGER = get_logger("redwood_dataagent")
 SUPPORTED_DB_ENGINES = ("postgres",)
 QUERY_RESULT_FINGERPRINT_LENGTH = 12
+
+
 @dataclass
 class QueryExecutionResult:
     """Metadata from a successful query execution."""
@@ -155,7 +156,7 @@ def _write_query_processed_marker_file(
         "output_s3_key": output_s3_key,
         "row_limit": contract.row_limit,
         "timeout_seconds": contract.timeout_seconds,
-        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "processed_at": datetime.now(UTC).isoformat(),
     }
     marker_path.write_text(json.dumps(marker_payload, sort_keys=True), encoding="utf-8")
 
@@ -253,9 +254,7 @@ def _get_ibis_connection(schema_name: str) -> Any:
             "Ibis postgres backend is unavailable. Install with: pip install ibis-framework[postgres]"
         ) from exc
     except Exception as exc:
-        raise ConfigurationError(
-            f"Failed to connect to PostgreSQL database for schema '{schema_name}': {exc}"
-        ) from exc
+        raise ConfigurationError(f"Failed to connect to PostgreSQL database for schema '{schema_name}': {exc}") from exc
 
 
 def _build_ibis_query(
@@ -299,9 +298,7 @@ def _build_ibis_query(
                 raise
             table = con.table(table_name, database=schema_name)
         except Exception as exc:
-            raise ConfigurationError(
-                f"Table '{table_name}' not found in schema '{schema_name}': {exc}"
-            ) from exc
+            raise ConfigurationError(f"Table '{table_name}' not found in schema '{schema_name}': {exc}") from exc
 
         table = _apply_filters(table, filters)
         table = _apply_select_fields(table, select_fields)
@@ -312,9 +309,7 @@ def _build_ibis_query(
     except ConfigurationError:
         raise
     except Exception as exc:
-        raise ConfigurationError(
-            f"Failed to build query for template '{contract.template_id}': {exc}"
-        ) from exc
+        raise ConfigurationError(f"Failed to build query for template '{contract.template_id}': {exc}") from exc
 
 
 def _extract_schema_and_table(params: dict[str, Any]) -> tuple[str, str]:
@@ -322,9 +317,7 @@ def _extract_schema_and_table(params: dict[str, Any]) -> tuple[str, str]:
     schema_name = params.get("schema")
     table_name = params.get("table")
     if not schema_name or not table_name:
-        raise ConfigurationError(
-            "Query contract must specify 'schema' and 'table' in params"
-        )
+        raise ConfigurationError("Query contract must specify 'schema' and 'table' in params")
     return schema_name, table_name
 
 
@@ -341,9 +334,7 @@ def _apply_filters(table: Any, filters: dict[str, Any]) -> Any:
 def _apply_single_field_filter(table: Any, field_name: str, filter_spec: Any) -> Any:
     """Apply min/max range constraints for a single field."""
     if not isinstance(filter_spec, dict):
-        raise ConfigurationError(
-            f"Filter for field '{field_name}' must be a dict, got {type(filter_spec).__name__}"
-        )
+        raise ConfigurationError(f"Filter for field '{field_name}' must be a dict, got {type(filter_spec).__name__}")
 
     if "min" in filter_spec:
         table = _apply_bound_filter(table, field_name, filter_spec["min"], "min")
@@ -365,7 +356,7 @@ def _apply_bound_filter(table: Any, field_name: str, value: Any, bound: str) -> 
         raise ConfigurationError(
             f"Filter field '{field_name}' does not exist in the table. "
             f"Please verify the field name in the query contract."
-        )
+        ) from None
     except Exception as exc:
         raise ConfigurationError(
             f"Failed to apply {bound} filter on field '{field_name}' with value {value}: {exc}"
@@ -381,13 +372,10 @@ def _apply_select_fields(table: Any, select_fields: list[Any]) -> Any:
         return table.select(select_fields)
     except KeyError as exc:
         raise ConfigurationError(
-            f"One or more select fields do not exist in the table: {select_fields}. "
-            f"Original error: {exc}"
+            f"One or more select fields do not exist in the table: {select_fields}. " f"Original error: {exc}"
         ) from exc
     except Exception as exc:
-        raise ConfigurationError(
-            f"Failed to select fields {select_fields}: {exc}"
-        ) from exc
+        raise ConfigurationError(f"Failed to select fields {select_fields}: {exc}") from exc
 
 
 def _apply_ordering(table: Any, order_by: Any) -> Any:
@@ -433,6 +421,7 @@ def _execute_query_with_timeout(
         If query execution exceeds timeout or fails
     """
     try:
+
         def timeout_handler(signum: int, frame: object) -> None:
             raise TimeoutError(f"Query execution exceeded {timeout_seconds}s timeout")
 
@@ -457,13 +446,9 @@ def _execute_query_with_timeout(
             signal.signal(signal.SIGALRM, old_handler)  # Restore handler
 
     except TimeoutError as exc:
-        raise StorageError(
-            f"Query execution timeout after {timeout_seconds}s: {exc}"
-        ) from exc
+        raise StorageError(f"Query execution timeout after {timeout_seconds}s: {exc}") from exc
     except Exception as exc:
-        raise StorageError(
-            f"Query execution failed: {exc}"
-        ) from exc
+        raise StorageError(f"Query execution failed: {exc}") from exc
 
 
 def _write_query_results_to_file(
@@ -506,9 +491,7 @@ def _write_query_results_to_file(
         return output_path.stat().st_size
 
     except Exception as exc:
-        raise StorageError(
-            f"Failed to write query results to {output_path}: {exc}"
-        ) from exc
+        raise StorageError(f"Failed to write query results to {output_path}: {exc}") from exc
 
 
 def _upload_results_to_s3(
@@ -573,9 +556,7 @@ def _upload_results_to_s3(
         return s3_key
 
     except Exception as exc:
-        raise StorageError(
-            f"Failed to upload query results to S3: {exc}"
-        ) from exc
+        raise StorageError(f"Failed to upload query results to S3: {exc}") from exc
 
 
 def execute_query(
@@ -660,7 +641,7 @@ def execute_query(
                 "marker_key": marker_key,
             },
         )
-        
+
         return QueryExecutionResult(
             row_count=0,
             file_size_bytes=0,
@@ -767,7 +748,7 @@ def execute_query(
         execution_duration = time.time() - start_time
         error_type = type(exc).__name__
         error_message = str(exc)
-        
+
         LOGGER.error(
             prefix_log_message(
                 f"Query execution failed: {error_message}",

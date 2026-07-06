@@ -14,17 +14,16 @@ import logging
 import tarfile
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from redwood_dataagent.audit.events import AuditEventType, EventOutcome
 from redwood_dataagent.audit.logger import log_event
+from redwood_dataagent.aws.s3 import S3Client
 from redwood_dataagent.exceptions import ManifestValidationError, StorageError
 from redwood_dataagent.models.manifest import (
     TransferManifest,
     normalize_archive_fields_to_standard,
 )
 from redwood_dataagent.storage.conventions import ReceiverStoragePath
-from redwood_dataagent.aws.s3 import S3Client
 
 _logger = logging.getLogger(__name__)
 
@@ -82,14 +81,10 @@ class ReceiverLandingZone:
             )
             prefixes = response.get("CommonPrefixes", [])
             agencies = [p["Prefix"].rstrip("/") for p in prefixes]
-            _logger.debug(
-                f"Found {len(agencies)} sender agency folder(s) in landing bucket: {agencies}"
-            )
+            _logger.debug(f"Found {len(agencies)} sender agency folder(s) in landing bucket: {agencies}")
             return agencies
         except Exception as e:
-            raise StorageError(
-                f"Failed to list sender agencies in {self.landing_bucket}: {e}"
-            ) from e
+            raise StorageError(f"Failed to list sender agencies in {self.landing_bucket}: {e}") from e
 
     def list_pending_transfers(self, sender_agency: str) -> list[str]:
         """List transfer session IDs under a sender agency folder.
@@ -116,21 +111,17 @@ class ReceiverLandingZone:
             prefixes = response.get("CommonPrefixes", [])
             # "dot/sess-001/" → "sess-001"
             sessions = [p["Prefix"].rstrip("/").split("/")[-1] for p in prefixes]
-            _logger.debug(
-                f"Found {len(sessions)} transfer session(s) for sender {sender_agency}: {sessions}"
-            )
+            _logger.debug(f"Found {len(sessions)} transfer session(s) for sender {sender_agency}: {sessions}")
             return sessions
         except Exception as e:
-            raise StorageError(
-                f"Failed to list pending transfers for sender {sender_agency}: {e}"
-            ) from e
+            raise StorageError(f"Failed to list pending transfers for sender {sender_agency}: {e}") from e
 
     def fetch_from_landing_bucket(
         self,
         transfer_session_id: str,
         sender_agency: str,
         receiver_agency: str,
-        target_directory: Optional[Path] = None,
+        target_directory: Path | None = None,
     ) -> tuple[Path | bytes, dict]:
         """Download archive and manifest from S3 landing zone.
 
@@ -168,9 +159,7 @@ class ReceiverLandingZone:
             if target_directory is not None:
                 target_directory.mkdir(parents=True, exist_ok=True)
                 archive_path = target_directory / _ARCHIVE_FILENAME
-                archive_size = self._download_to_file(
-                    archive_key, _ARCHIVE_FILENAME, archive_path
-                )
+                archive_size = self._download_to_file(archive_key, _ARCHIVE_FILENAME, archive_path)
                 archive_payload: Path | bytes = archive_path
             else:
                 archive_bytes = self._download_from_s3(archive_key, _ARCHIVE_FILENAME)
@@ -220,8 +209,8 @@ class ReceiverLandingZone:
         transfer_session_id: str,
         sender_agency: str,
         receiver_agency: str,
-        archive_bytes: Optional[bytes] = None,
-        archive_path: Optional[Path] = None,
+        archive_bytes: bytes | None = None,
+        archive_path: Path | None = None,
     ) -> TransferManifest:
         """Validate manifest and verify archive checksum.
 
@@ -252,9 +241,7 @@ class ReceiverLandingZone:
             elif archive_bytes is not None:
                 archive_checksum = hashlib.sha256(archive_bytes).hexdigest()
             else:
-                raise ManifestValidationError(
-                    "Either archive_path or archive_bytes must be provided"
-                )
+                raise ManifestValidationError("Either archive_path or archive_bytes must be provided")
 
             # Manifest should have 2 entries: source file + archive
             # First entry: original source file (file_name, file_size_bytes, checksum_sha256)
@@ -267,12 +254,9 @@ class ReceiverLandingZone:
             # Archive is the second entry - use its checksum for validation
             archive_entry = manifest.files[1]
             expected_checksum = archive_entry.checksum_sha256
-            
+
             if archive_checksum != expected_checksum:
-                error_msg = (
-                    f"Archive checksum mismatch: "
-                    f"expected {expected_checksum}, got {archive_checksum}"
-                )
+                error_msg = f"Archive checksum mismatch: " f"expected {expected_checksum}, got {archive_checksum}"
                 raise ManifestValidationError(error_msg)
 
             # Log successful validation
@@ -313,12 +297,12 @@ class ReceiverLandingZone:
 
     def decompress_archive(
         self,
-        target_directory: Optional[Path] = None,
-        transfer_session_id: Optional[str] = None,
-        sender_agency: Optional[str] = None,
-        receiver_agency: Optional[str] = None,
-        archive_bytes: Optional[bytes] = None,
-        archive_path: Optional[Path] = None,
+        target_directory: Path | None = None,
+        transfer_session_id: str | None = None,
+        sender_agency: str | None = None,
+        receiver_agency: str | None = None,
+        archive_bytes: bytes | None = None,
+        archive_path: Path | None = None,
     ) -> dict:
         """Decompress tar.gz archive to working directory.
 
@@ -392,7 +376,7 @@ class ReceiverLandingZone:
 
             raise StorageError(error_msg) from e
 
-    def _prepare_extract_directory(self, target_directory: Optional[Path]) -> Path:
+    def _prepare_extract_directory(self, target_directory: Path | None) -> Path:
         """Prepare and return extraction target directory."""
         if target_directory is None:
             # Create secure temp directory with restricted permissions (0o700)
@@ -404,8 +388,8 @@ class ReceiverLandingZone:
 
     def _open_archive(
         self,
-        archive_path: Optional[Path],
-        archive_bytes: Optional[bytes],
+        archive_path: Path | None,
+        archive_bytes: bytes | None,
     ) -> tarfile.TarFile:
         """Open tar.gz archive from path or bytes."""
         if archive_path is not None:
@@ -461,14 +445,11 @@ class ReceiverLandingZone:
         try:
             # Use S3Client to download file
             file_content = io.BytesIO()
-            
+
             # Download from S3
-            response = self.s3_client._client.get_object(
-                Bucket=self.landing_bucket,
-                Key=s3_key
-            )
-            file_content.write(response['Body'].read())
-            
+            response = self.s3_client._client.get_object(Bucket=self.landing_bucket, Key=s3_key)
+            file_content.write(response["Body"].read())
+
             return file_content.getvalue()
 
         except Exception as e:

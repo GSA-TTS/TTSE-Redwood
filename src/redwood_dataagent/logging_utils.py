@@ -1,22 +1,19 @@
-from __future__ import annotations
-
 """Logging helpers for consistent JSON output with context tracking."""
+
+from __future__ import annotations
 
 import contextvars
 import json
 import logging
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator, Optional
+from typing import Any
 
 # Context variable for transfer session ID (async-safe)
 # Using contextvars ensures thread/async-safe tracking across concurrent operations.
 # Each coroutine/thread gets its own session ID via the context.
-_transfer_session_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "transfer_session_id", default=None
-)
-_agent_mode: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "agent_mode", default=None
-)
+_transfer_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("transfer_session_id", default=None)
+_agent_mode: contextvars.ContextVar[str | None] = contextvars.ContextVar("agent_mode", default=None)
 
 _STANDARD_LOG_RECORD_FIELDS = {
     "args",
@@ -129,17 +126,17 @@ def configure_logging(level: str) -> None:
     root_logger.addHandler(handler)
 
 
-def set_agent_mode(agent_mode: Optional[str]) -> None:
+def set_agent_mode(agent_mode: str | None) -> None:
     """Set the current agent mode in context."""
     _agent_mode.set(agent_mode)
 
 
-def get_agent_mode() -> Optional[str]:
+def get_agent_mode() -> str | None:
     """Get the current agent mode from context."""
     return _agent_mode.get()
 
 
-def set_transfer_session_id(session_id: Optional[str]) -> None:
+def set_transfer_session_id(session_id: str | None) -> None:
     """
     Set the current transfer session ID in context.
 
@@ -151,7 +148,7 @@ def set_transfer_session_id(session_id: Optional[str]) -> None:
     _transfer_session_id.set(session_id)
 
 
-def get_transfer_session_id() -> Optional[str]:
+def get_transfer_session_id() -> str | None:
     """
     Get the current transfer session ID from context.
 
@@ -188,8 +185,8 @@ def logging_context(session_id: str) -> Generator[None, None, None]:
 def prefix_log_message(
     message: str,
     *,
-    agent_mode: Optional[str] = None,
-    transfer_session_id: Optional[str] = None,
+    agent_mode: str | None = None,
+    transfer_session_id: str | None = None,
 ) -> str:
     """Prefix a log message with agent mode and transfer session context."""
     parts: list[str] = []

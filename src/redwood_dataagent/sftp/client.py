@@ -8,14 +8,16 @@ and exception translation.
 from __future__ import annotations
 
 import io
-import logging
 import os
 from pathlib import Path
 from time import sleep
-from typing import Optional
+from typing import TYPE_CHECKING
 
 from redwood_dataagent.exceptions import SFTPError
 from redwood_dataagent.logging_utils import get_logger
+
+if TYPE_CHECKING:
+    import paramiko
 
 LOGGER = get_logger(__name__)
 
@@ -107,7 +109,7 @@ class SFTPClient:
     ...     Path("/tmp/archive.tar.gz"),
     ...     "/outgoing/transfers/archive.tar.gz"
     ... )
-    
+
     >>> # Using DNS with key file
     >>> client = SFTPClient(
     ...     hosts=["sftp.example.com"],
@@ -120,33 +122,41 @@ class SFTPClient:
         self,
         hosts: list[str],
         username: str,
-        key_content: Optional[str] = None,
-        key_path: Optional[Path] = None,
-        password: Optional[str] = None,
+        key_content: str | None = None,
+        key_path: Path | None = None,
+        password: str | None = None,
         port: int = 22,
-        timeout: Optional[int] = None,
-        max_retries: Optional[int] = None,
+        timeout: int | None = None,
+        max_retries: int | None = None,
         retry_backoff: float = 2.0,
-        chunk_size_mb: Optional[int] = None,
+        chunk_size_mb: int | None = None,
     ) -> None:
         """Initialize SFTP client with multi-endpoint support."""
         # Lazy import for testing flexibility
         try:
             import paramiko
+
             self._paramiko = paramiko
         except ImportError as e:
-            raise ImportError(
-                "paramiko is required for SFTP support. "
-                "Install with: pip install paramiko"
-            ) from e
+            raise ImportError("paramiko is required for SFTP support. " "Install with: pip install paramiko") from e
 
         if not hosts:
             raise SFTPError("hosts list cannot be empty")
 
         # Resolve env-driven defaults so agencies can tune without code changes.
-        resolved_timeout = timeout if timeout is not None else _get_positive_int_env("SFTP_TIMEOUT", _DEFAULT_SFTP_TIMEOUT)
-        resolved_max_retries = max_retries if max_retries is not None else _get_positive_int_env("SFTP_MAX_RETRIES", _DEFAULT_SFTP_MAX_RETRIES)
-        resolved_chunk_size_mb = chunk_size_mb if chunk_size_mb is not None else _get_positive_int_env("SFTP_CHUNK_SIZE_MB", _DEFAULT_SFTP_CHUNK_SIZE_MB)
+        resolved_timeout = (
+            timeout if timeout is not None else _get_positive_int_env("SFTP_TIMEOUT", _DEFAULT_SFTP_TIMEOUT)
+        )
+        resolved_max_retries = (
+            max_retries
+            if max_retries is not None
+            else _get_positive_int_env("SFTP_MAX_RETRIES", _DEFAULT_SFTP_MAX_RETRIES)
+        )
+        resolved_chunk_size_mb = (
+            chunk_size_mb
+            if chunk_size_mb is not None
+            else _get_positive_int_env("SFTP_CHUNK_SIZE_MB", _DEFAULT_SFTP_CHUNK_SIZE_MB)
+        )
 
         self._hosts = hosts
         self._port = port
@@ -163,10 +173,7 @@ class SFTPClient:
 
         # Validate authentication method (key or password required)
         if password is None and key_path is None and key_content is None:
-            raise SFTPError(
-                "Either password, key_path, or key_content must be provided "
-                "for SFTP authentication"
-            )
+            raise SFTPError("Either password, key_path, or key_content must be provided " "for SFTP authentication")
 
         # If key_path is provided, validate it exists
         if key_path is not None and not key_path.exists():
@@ -179,9 +186,7 @@ class SFTPClient:
                 "hosts": hosts,
                 "port": port,
                 "username": username,
-                "auth_method": (
-                    "key" if (key_path or key_content) else "password"
-                ),
+                "auth_method": ("key" if (key_path or key_content) else "password"),
                 "num_endpoints": len(hosts),
                 "timeout_seconds": self._timeout,
                 "max_retries": self._max_retries,
@@ -208,9 +213,7 @@ class SFTPClient:
             except (self._paramiko.SSHException, ValueError):
                 key_file.seek(0)
 
-        raise SFTPError(
-            "Could not load private key - unsupported format or invalid key"
-        )
+        raise SFTPError("Could not load private key - unsupported format or invalid key")
 
     def _connect(self) -> paramiko.SFTPClient:
         """Create and return an SFTP client connection with multi-endpoint failover.
@@ -248,13 +251,10 @@ class SFTPClient:
                     },
                 )
                 raise SFTPError(
-                    f"SFTP authentication failed for {self._username}@{host}. "
-                    "Check injected SFTP credentials."
+                    f"SFTP authentication failed for {self._username}@{host}. " "Check injected SFTP credentials."
                 ) from e
             except self._paramiko.SSHException as e:
-                last_error = SFTPError(
-                    f"SSH connection failed to {host}:{self._port}: {e}"
-                )
+                last_error = SFTPError(f"SSH connection failed to {host}:{self._port}: {e}")
                 self._log_connection_warning(
                     "SSH connection failed, trying next endpoint",
                     host,
@@ -262,9 +262,7 @@ class SFTPClient:
                     e,
                 )
             except OSError as e:
-                last_error = SFTPError(
-                    f"Network error connecting to {host}:{self._port}: {e}"
-                )
+                last_error = SFTPError(f"Network error connecting to {host}:{self._port}: {e}")
                 self._log_connection_warning(
                     "Network error, trying next endpoint",
                     host,
@@ -272,9 +270,7 @@ class SFTPClient:
                     e,
                 )
             except Exception as e:
-                last_error = SFTPError(
-                    f"Failed to connect to SFTP server {host}: {e}"
-                )
+                last_error = SFTPError(f"Failed to connect to SFTP server {host}: {e}")
                 self._log_connection_warning(
                     "Unexpected error, trying next endpoint",
                     host,
@@ -333,9 +329,7 @@ class SFTPClient:
                 timeout=self._timeout,
             )
 
-    def _configure_transport(
-        self, transport: Optional[paramiko.transport.Transport]
-    ) -> None:
+    def _configure_transport(self, transport: paramiko.transport.Transport | None) -> None:
         if transport is None:
             return
 
@@ -349,9 +343,7 @@ class SFTPClient:
         except OSError:
             pass  # best-effort; may not apply on all platforms
 
-    def _log_connection_warning(
-        self, message: str, host: str, event: str, error: Exception
-    ) -> None:
+    def _log_connection_warning(self, message: str, host: str, event: str, error: Exception) -> None:
         LOGGER.warning(
             message,
             extra={
@@ -361,9 +353,7 @@ class SFTPClient:
             },
         )
 
-    def upload_file(
-        self, source_path: Path, remote_path: str
-    ) -> dict:
+    def upload_file(self, source_path: Path, remote_path: str) -> dict:
         """Upload a file from container filesystem to SFTP server.
 
         Orchestrates upload attempts, retry/backoff behavior, and final
@@ -419,17 +409,11 @@ class SFTPClient:
         for attempt in range(1, self._max_retries + 2):
             try:
                 connected_host = self._upload_file_attempt(source_path, remote_path)
-                return self._build_upload_metadata(
-                    source_path, remote_path, file_size, attempt, connected_host
-                )
+                return self._build_upload_metadata(source_path, remote_path, file_size, attempt, connected_host)
             except self._paramiko.SSHException as e:
-                self._handle_upload_ssh_exception(
-                    source_path, remote_path, attempt, connected_host, e
-                )
+                self._handle_upload_ssh_exception(source_path, remote_path, attempt, connected_host, e)
             except OSError as e:
-                raise SFTPError(
-                    f"Failed to read local file {source_path}: {e}"
-                ) from e
+                raise SFTPError(f"Failed to read local file {source_path}: {e}") from e
             except Exception as e:
                 raise SFTPError(
                     f"Failed to upload file to sftp://{connected_host or '(all endpoints)'}{remote_path}: {e}"
@@ -450,9 +434,7 @@ class SFTPClient:
             sftp.close()
         return connected_host
 
-    def _stream_upload(
-        self, sftp: paramiko.SFTPClient, source_path: Path, remote_path: str
-    ) -> None:
+    def _stream_upload(self, sftp: paramiko.SFTPClient, source_path: Path, remote_path: str) -> None:
         """Stream local file contents to the remote destination in chunks."""
         with open(source_path, "rb") as local_fh:
             with sftp.open(remote_path, "wb") as remote_fh:
@@ -497,7 +479,7 @@ class SFTPClient:
         source_path: Path,
         remote_path: str,
         attempt: int,
-        connected_host: Optional[str],
+        connected_host: str | None,
         error: Exception,
     ) -> None:
         """Retry on transient SSH errors or raise after max retries."""
@@ -597,10 +579,6 @@ class SFTPClient:
                 },
             )
         except OSError as e:
-            raise SFTPError(
-                f"File not found on SFTP server: {remote_path}"
-            ) from e
+            raise SFTPError(f"File not found on SFTP server: {remote_path}") from e
         except Exception as e:
-            raise SFTPError(
-                f"Failed to delete {remote_path} from SFTP server: {e}"
-            ) from e
+            raise SFTPError(f"Failed to delete {remote_path} from SFTP server: {e}") from e

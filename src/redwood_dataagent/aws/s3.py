@@ -80,6 +80,7 @@ class S3Client:
         """
         try:
             import boto3
+
             try:
                 from boto3.s3.transfer import TransferConfig
             except Exception:
@@ -117,9 +118,7 @@ class S3Client:
                 },
             )
         except ImportError as e:
-            raise ImportError(
-                "boto3 is required for S3 operations. Install with: pip install boto3"
-            ) from e
+            raise ImportError("boto3 is required for S3 operations. Install with: pip install boto3") from e
 
     def download_file(self, bucket: str, key: str, destination_path: Path) -> None:
         """Download a file from S3 to container filesystem (S3 → container).
@@ -178,9 +177,7 @@ class S3Client:
         except OSError as e:
             raise StorageError(f"Failed to write file to {destination_path}: {e}") from e
         except Exception as e:
-            raise StorageError(
-                f"Failed to download S3 object s3://{bucket}/{key}: {e}"
-            ) from e
+            raise StorageError(f"Failed to download S3 object s3://{bucket}/{key}: {e}") from e
 
     def upload_file(self, source_path: Path, bucket: str, key: str) -> None:
         """Upload a file from container filesystem to S3 (container → S3).
@@ -243,9 +240,7 @@ class S3Client:
         except OSError as e:
             raise StorageError(f"Failed to read file {source_path}: {e}") from e
         except Exception as e:
-            raise StorageError(
-                f"Failed to upload file to s3://{bucket}/{key}: {e}"
-            ) from e
+            raise StorageError(f"Failed to upload file to s3://{bucket}/{key}: {e}") from e
 
     def object_exists(self, bucket: str, key: str) -> bool:
         """Check if an S3 object exists without raising exceptions.

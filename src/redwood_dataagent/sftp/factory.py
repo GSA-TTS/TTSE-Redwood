@@ -65,16 +65,12 @@ def create_sftp_client_from_credentials(
     """
     # Validate username is a non-empty string
     if not isinstance(username, str) or not username.strip():
-        raise StorageError(
-            "Invalid SFTP username value: "
-            f"expected non-empty string, got {type(username).__name__}"
-        )
+        raise StorageError("Invalid SFTP username value: " f"expected non-empty string, got {type(username).__name__}")
 
     # Validate private key is a non-empty string
     if not isinstance(private_key_content, str) or not private_key_content.strip():
         raise StorageError(
-            "Invalid SFTP private key value: "
-            f"expected non-empty string, got {type(private_key_content).__name__}"
+            "Invalid SFTP private key value: " f"expected non-empty string, got {type(private_key_content).__name__}"
         )
 
     # Log what we're doing (for debugging/monitoring)

@@ -5,10 +5,10 @@ import pytest
 from redwood_dataagent.config import AgentConfig, load_config
 from redwood_dataagent.exceptions import ConfigurationError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reset env vars used by load_config() and seed required baseline defaults."""
@@ -42,6 +42,7 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # Default values
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-agency defaults are applied correctly; AGENCY must be explicitly set."""
@@ -83,7 +84,7 @@ def test_load_config_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENCY", "gsa")
     config = load_config()
 
-    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
+    with pytest.raises(Exception):  # noqa: B017 # dataclasses.FrozenInstanceError
         config.agent_mode = "sender"  # type: ignore[misc]
 
 
@@ -162,6 +163,7 @@ def test_load_config_query_caps_invalid_non_positive_raises(monkeypatch: pytest.
 # AGENT_MODE
 # ---------------------------------------------------------------------------
 
+
 def test_load_config_agent_mode_sender(monkeypatch: pytest.MonkeyPatch) -> None:
     """AGENT_MODE=sender is accepted and stored in lowercase."""
     _clear_all_env(monkeypatch)
@@ -195,6 +197,7 @@ def test_load_config_invalid_agent_mode(monkeypatch: pytest.MonkeyPatch) -> None
 # ---------------------------------------------------------------------------
 # Agency names
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_agency_sender_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """AGENCY is mapped to sender_agency when AGENT_MODE=sender."""
@@ -246,6 +249,7 @@ def test_load_config_blank_agency_raises(monkeypatch: pytest.MonkeyPatch) -> Non
 # Environment
 # ---------------------------------------------------------------------------
 
+
 def test_load_config_blank_environment_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A blank ENVIRONMENT value raises ConfigurationError."""
     _clear_all_env(monkeypatch)
@@ -259,6 +263,7 @@ def test_load_config_blank_environment_raises(monkeypatch: pytest.MonkeyPatch) -
 # ---------------------------------------------------------------------------
 # Derived bucket names
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_sender_staging_bucket_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default DOT sender staging bucket follows the naming convention."""
@@ -391,6 +396,7 @@ def test_load_config_day1_gsa_receiver_scenario(monkeypatch: pytest.MonkeyPatch)
 # transfer_session_id
 # ---------------------------------------------------------------------------
 
+
 def test_load_config_generates_transfer_session_id_when_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -431,6 +437,7 @@ def test_load_config_unique_session_ids_generated(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 # LOG_LEVEL normalisation
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_log_level_normalised_to_uppercase(
     monkeypatch: pytest.MonkeyPatch,
@@ -479,6 +486,7 @@ def test_load_config_sender_data_directory_derived_from_sender_bucket(
 # ConfigurationError is a domain exception (not a bare ValueError)
 # ---------------------------------------------------------------------------
 
+
 def test_configuration_error_is_not_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """ConfigurationError must not be a subclass of ValueError."""
     monkeypatch.setenv("AGENT_MODE", "bad")
@@ -500,6 +508,7 @@ def test_configuration_error_is_not_value_error(monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------------------
 # SFTP Configuration
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_sftp_endpoints_single_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     """SFTP_ENDPOINTS can be a single IP address."""
@@ -556,7 +565,9 @@ def test_load_config_sftp_endpoints_whitespace_trimmed(monkeypatch: pytest.Monke
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("SFTP_ENDPOINTS", "  10.0.1.50 , 10.0.2.50  ")
     monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
-    monkeypatch.setenv("SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----")
+    monkeypatch.setenv(
+        "SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----"
+    )
 
     config = load_config()
 
@@ -609,7 +620,9 @@ def test_load_config_sftp_username_and_private_key_loaded(monkeypatch: pytest.Mo
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
     monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
-    monkeypatch.setenv("SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----")
+    monkeypatch.setenv(
+        "SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----"
+    )
 
     config = load_config()
 
@@ -651,7 +664,9 @@ def test_load_config_sftp_full_scenario(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("ENVIRONMENT", "dev")
     monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50,10.0.2.50,10.0.3.50")
     monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
-    monkeypatch.setenv("SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----")
+    monkeypatch.setenv(
+        "SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----"
+    )
 
     config = load_config()
 

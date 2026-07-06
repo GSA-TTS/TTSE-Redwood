@@ -44,7 +44,7 @@ Example usage:
     )
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from redwood_dataagent.audit.events import (
     AuditEvent,
@@ -53,7 +53,6 @@ from redwood_dataagent.audit.events import (
 )
 from redwood_dataagent.logging_utils import (
     get_logger,
-    get_transfer_session_id,
     prefix_log_message,
 )
 
@@ -68,9 +67,9 @@ def log_event(
     receiver_agency: str,
     stage: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    destination_host: Optional[str] = None,
-    bytes_transferred: Optional[int] = None,
-    details: Optional[Dict[str, Any]] = None,
+    destination_host: str | None = None,
+    bytes_transferred: int | None = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Emit a structured audit event via JSON logging.
@@ -146,7 +145,7 @@ def log_pipeline_start(
     transfer_session_id: str,
     sender_agency: str,
     receiver_agency: str,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log PIPELINE_START event.
@@ -179,7 +178,7 @@ def log_extract_data(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log EXTRACT_DATA event.
@@ -213,7 +212,7 @@ def log_policy_check(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log POLICY_CHECK event.
@@ -247,7 +246,7 @@ def log_compress(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log COMPRESS event.
@@ -281,7 +280,7 @@ def log_manifest_created(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log MANIFEST_CREATED event.
@@ -315,7 +314,7 @@ def log_sftp_transfer_start(
     sender_agency: str,
     receiver_agency: str,
     destination_host: str,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log SFTP_TRANSFER_START event.
@@ -351,7 +350,7 @@ def log_sftp_transfer_complete(
     destination_host: str,
     bytes_transferred: int,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log SFTP_TRANSFER_COMPLETE event.
@@ -388,7 +387,7 @@ def log_validate_manifest(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log VALIDATE_MANIFEST event.
@@ -422,7 +421,7 @@ def log_decompress(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log DECOMPRESS event.
@@ -455,7 +454,7 @@ def log_store_data(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log STORE_DATA event.
@@ -489,7 +488,7 @@ def log_pipeline_complete(
     sender_agency: str,
     receiver_agency: str,
     outcome: EventOutcome = EventOutcome.SUCCESS,
-    details: Optional[Dict[str, Any]] = None,
+    details: dict[str, Any] | None = None,
 ) -> AuditEvent:
     """
     Log PIPELINE_COMPLETE event.

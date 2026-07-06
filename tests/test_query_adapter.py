@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -195,7 +195,7 @@ class TestBuildIbisQuery:
             mock_ibis = MagicMock()
             mock_desc_result = MagicMock()
             mock_ibis.desc.return_value = mock_desc_result
-            
+
             mock_table = MagicMock()
             mock_connection = MagicMock()
             mock_connection.table.return_value = mock_table
@@ -226,7 +226,7 @@ class TestBuildIbisQuery:
             mock_ibis = MagicMock()
             mock_asc_result = MagicMock()
             mock_ibis.asc.return_value = mock_asc_result
-            
+
             mock_table = MagicMock()
             mock_connection = MagicMock()
             mock_connection.table.return_value = mock_table
@@ -406,8 +406,10 @@ class TestExecuteQueryWithTimeout:
                 handler = handler_holder["handler"]
                 handler(14, object())  # type: ignore[operator]
 
-        with patch("redwood_dataagent.query_adapter.signal.signal", side_effect=_signal_side_effect), \
-             patch("redwood_dataagent.query_adapter.signal.alarm", side_effect=_alarm_side_effect):
+        with (
+            patch("redwood_dataagent.query_adapter.signal.signal", side_effect=_signal_side_effect),
+            patch("redwood_dataagent.query_adapter.signal.alarm", side_effect=_alarm_side_effect),
+        ):
             with pytest.raises(StorageError, match="Query execution timeout"):
                 _execute_query_with_timeout(mock_table, timeout_seconds=1, row_limit=10)
 
@@ -647,13 +649,14 @@ class TestExecuteQuery:
             sftp_username="test-secret",
         )
 
-        with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
-             patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute, \
-             patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload, \
-               patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
-               patch("redwood_dataagent.query_adapter._upload_query_processed_marker"), \
-             patch("redwood_dataagent.query_adapter.signal"):
-
+        with (
+            patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build,
+            patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute,
+            patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload,
+            patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False),
+            patch("redwood_dataagent.query_adapter._upload_query_processed_marker"),
+            patch("redwood_dataagent.query_adapter.signal"),
+        ):
             mock_table = MagicMock()
             mock_build.return_value = (mock_table, 100)
 
@@ -662,7 +665,9 @@ class TestExecuteQuery:
                 {"contract_id": "2", "vendor_name": "Beta Inc"},
             ]
             mock_execute.return_value = rows
-            mock_upload.return_value = "query_mode/outgoing/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
+            mock_upload.return_value = (
+                "query_mode/outgoing/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
+            )
 
             result = execute_query(contract, config)
 
@@ -718,10 +723,11 @@ class TestExecuteQuery:
                 mock_client.object_exists.return_value = True
                 mock_s3_client_class.return_value = mock_client
 
-                with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
-                     patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute, \
-                     patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload:
-
+                with (
+                    patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build,
+                    patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute,
+                    patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload,
+                ):
                     result = execute_query(contract, config)
 
         assert result.skipped is True
@@ -780,9 +786,10 @@ class TestExecuteQuery:
                 mock_client.object_exists.return_value = False
                 mock_s3_client_class.return_value = mock_client
 
-                with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
-                     patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute:
-
+                with (
+                    patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build,
+                    patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute,
+                ):
                     mock_table = MagicMock()
                     mock_build.return_value = (mock_table, 100)
                     mock_execute.return_value = [
@@ -824,9 +831,10 @@ class TestExecuteQuery:
             sftp_username="test-secret",
         )
 
-        with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
-             patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute:
-
+        with (
+            patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build,
+            patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute,
+        ):
             mock_table = MagicMock()
             mock_build.return_value = (mock_table, 100)
             mock_execute.side_effect = StorageError("Query execution exceeded 60s timeout")
@@ -898,14 +906,15 @@ class TestAuditEventEmission:
             sftp_username="test-secret",
         )
 
-        with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
-             patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute, \
-             patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload, \
-             patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
-             patch("redwood_dataagent.query_adapter._upload_query_processed_marker"), \
-             patch("redwood_dataagent.query_adapter.log_event") as mock_log_event, \
-             patch("redwood_dataagent.query_adapter.signal"):
-
+        with (
+            patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build,
+            patch("redwood_dataagent.query_adapter._execute_query_with_timeout") as mock_execute,
+            patch("redwood_dataagent.query_adapter._upload_results_to_s3") as mock_upload,
+            patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False),
+            patch("redwood_dataagent.query_adapter._upload_query_processed_marker"),
+            patch("redwood_dataagent.query_adapter.log_event") as mock_log_event,
+            patch("redwood_dataagent.query_adapter.signal"),
+        ):
             mock_table = MagicMock()
             mock_build.return_value = (mock_table, 100)
 
@@ -914,20 +923,22 @@ class TestAuditEventEmission:
                 {"contract_id": "2", "vendor_name": "Beta Inc"},
             ]
             mock_execute.return_value = rows
-            mock_upload.return_value = "query_mode/outgoing/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
+            mock_upload.return_value = (
+                "query_mode/outgoing/test-session-001/dot_contract_extract_v1_ce9b55325ce3_results.csv"
+            )
 
             result = execute_query(contract, config)
 
             # Verify EXTRACT_DATA event was emitted with SUCCESS outcome
             mock_log_event.assert_called_once()
             call_args = mock_log_event.call_args
-            
+
             assert call_args.kwargs["event_type"] == AuditEventType.EXTRACT_DATA
             assert call_args.kwargs["transfer_session_id"] == "test-session-001"
             assert call_args.kwargs["sender_agency"] == "dot"
             assert call_args.kwargs["receiver_agency"] == "gsa"
             assert call_args.kwargs["outcome"] == EventOutcome.SUCCESS
-            
+
             # Verify metadata in details
             details = call_args.kwargs["details"]
             assert details["template_id"] == "dot_contract_extract_v1"
@@ -966,10 +977,11 @@ class TestAuditEventEmission:
             sftp_username="test-secret",
         )
 
-        with patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build, \
-             patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
-             patch("redwood_dataagent.query_adapter.log_event") as mock_log_event:
-
+        with (
+            patch("redwood_dataagent.query_adapter._build_ibis_query") as mock_build,
+            patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False),
+            patch("redwood_dataagent.query_adapter.log_event") as mock_log_event,
+        ):
             error_msg = "Table 'nonexistent_table' not found in schema 'dot'"
             mock_build.side_effect = ConfigurationError(error_msg)
 
@@ -979,10 +991,10 @@ class TestAuditEventEmission:
             # Verify EXTRACT_DATA event was emitted with FAILURE outcome
             mock_log_event.assert_called_once()
             call_args = mock_log_event.call_args
-            
+
             assert call_args.kwargs["event_type"] == AuditEventType.EXTRACT_DATA
             assert call_args.kwargs["outcome"] == EventOutcome.FAILURE
-            
+
             # Verify error details
             details = call_args.kwargs["details"]
             assert details["error_type"] == "ConfigurationError"
@@ -1029,9 +1041,10 @@ class TestAuditEventEmission:
             },
             clear=False,
         ):
-            with patch("redwood_dataagent.query_adapter.S3Client") as mock_s3_client_class, \
-                 patch("redwood_dataagent.query_adapter.log_event") as mock_log_event:
-
+            with (
+                patch("redwood_dataagent.query_adapter.S3Client") as mock_s3_client_class,
+                patch("redwood_dataagent.query_adapter.log_event") as mock_log_event,
+            ):
                 mock_client = MagicMock()
                 mock_client.object_exists.return_value = True
                 mock_s3_client_class.return_value = mock_client
@@ -1041,10 +1054,10 @@ class TestAuditEventEmission:
                 # Verify EXTRACT_DATA event was emitted with SUCCESS outcome (skipped)
                 mock_log_event.assert_called_once()
                 call_args = mock_log_event.call_args
-                
+
                 assert call_args.kwargs["event_type"] == AuditEventType.EXTRACT_DATA
                 assert call_args.kwargs["outcome"] == EventOutcome.SUCCESS
-                
+
                 # Verify skip details
                 details = call_args.kwargs["details"]
                 assert details["execution_status"] == "skipped"
@@ -1084,13 +1097,18 @@ class TestExecuteQueryCleanup:
         work_dir = tmp_path / "work"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        with patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False), \
-             patch("redwood_dataagent.query_adapter._build_ibis_query", return_value=(MagicMock(), 10)), \
-             patch("redwood_dataagent.query_adapter._execute_query_with_timeout", return_value=[{"id": 1}]), \
-             patch("redwood_dataagent.query_adapter._upload_results_to_s3", return_value="query_mode/outgoing/test-session-cleanup/out.csv"), \
-             patch("redwood_dataagent.query_adapter.tempfile.mkdtemp", return_value=str(work_dir)), \
-             patch("pathlib.Path.unlink", side_effect=OSError("unlink failed")), \
-             patch("redwood_dataagent.query_adapter.shutil.rmtree", side_effect=OSError("rmtree failed")):
+        with (
+            patch("redwood_dataagent.query_adapter._query_already_processed", return_value=False),
+            patch("redwood_dataagent.query_adapter._build_ibis_query", return_value=(MagicMock(), 10)),
+            patch("redwood_dataagent.query_adapter._execute_query_with_timeout", return_value=[{"id": 1}]),
+            patch(
+                "redwood_dataagent.query_adapter._upload_results_to_s3",
+                return_value="query_mode/outgoing/test-session-cleanup/out.csv",
+            ),
+            patch("redwood_dataagent.query_adapter.tempfile.mkdtemp", return_value=str(work_dir)),
+            patch("pathlib.Path.unlink", side_effect=OSError("unlink failed")),
+            patch("redwood_dataagent.query_adapter.shutil.rmtree", side_effect=OSError("rmtree failed")),
+        ):
             result = execute_query(contract, config)
 
         assert result.skipped is False

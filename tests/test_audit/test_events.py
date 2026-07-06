@@ -9,8 +9,9 @@ This module tests:
 - JSON serialization to structured log format
 """
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, timezone
 from pydantic import ValidationError
 
 from redwood_dataagent.audit.events import (
@@ -98,7 +99,7 @@ class TestAuditEvent:
             sender_agency="dot",
             receiver_agency="gsa",
             stage="sender",
-            outcome=EventOutcome.SUCCESS
+            outcome=EventOutcome.SUCCESS,
         )
 
         assert event.event_type == AuditEventType.PIPELINE_START
@@ -119,7 +120,7 @@ class TestAuditEvent:
                 sender_agency="dot",
                 receiver_agency="gsa",
                 stage="sender",
-                outcome=EventOutcome.SUCCESS
+                outcome=EventOutcome.SUCCESS,
             )
 
         assert "transfer_session_id" in str(exc_info.value).lower()
@@ -134,7 +135,7 @@ class TestAuditEvent:
             stage="transfer",
             outcome=EventOutcome.SUCCESS,
             destination_host="fde-gsa-dev-sftp.transfer.amazonaws.com",
-            bytes_transferred=102400
+            bytes_transferred=102400,
         )
 
         assert event.destination_host == "fde-gsa-dev-sftp.transfer.amazonaws.com"
@@ -150,16 +151,12 @@ class TestAuditEvent:
                 receiver_agency="gsa",
                 stage="transfer",
                 outcome=EventOutcome.SUCCESS,
-                bytes_transferred=-1
+                bytes_transferred=-1,
             )
 
     def test_event_with_details_dict(self):
         """Test creating an event with optional details context."""
-        details = {
-            "file_count": 5,
-            "total_size_bytes": 1024000,
-            "compression_ratio": 0.75
-        }
+        details = {"file_count": 5, "total_size_bytes": 1024000, "compression_ratio": 0.75}
 
         event = AuditEvent(
             event_type=AuditEventType.COMPRESS,
@@ -168,7 +165,7 @@ class TestAuditEvent:
             receiver_agency="gsa",
             stage="sender",
             outcome=EventOutcome.SUCCESS,
-            details=details
+            details=details,
         )
 
         assert event.details == details
@@ -176,16 +173,16 @@ class TestAuditEvent:
 
     def test_event_timestamp_defaults_to_now(self):
         """Test that timestamp defaults to current UTC time."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         event = AuditEvent(
             event_type=AuditEventType.PIPELINE_START,
             transfer_session_id="transfer-20260317-001",
             sender_agency="dot",
             receiver_agency="gsa",
             stage="sender",
-            outcome=EventOutcome.SUCCESS
+            outcome=EventOutcome.SUCCESS,
         )
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
 
         assert before <= event.timestamp <= after
 
@@ -200,7 +197,7 @@ class TestAuditEvent:
             outcome=EventOutcome.SUCCESS,
             destination_host="fde-gsa-dev-sftp.transfer.amazonaws.com",
             bytes_transferred=102400,
-            details={"files_transferred": 3}
+            details={"files_transferred": 3},
         )
 
         log_dict = event.to_structured_log()
@@ -224,7 +221,7 @@ class TestAuditEvent:
             sender_agency="dot",
             receiver_agency="gsa",
             stage="sender",
-            outcome=EventOutcome.SUCCESS
+            outcome=EventOutcome.SUCCESS,
         )
 
         log_dict = event.to_structured_log()
@@ -257,7 +254,7 @@ class TestAuditEvent:
                 sender_agency="dot",
                 receiver_agency="gsa",
                 stage="test",
-                outcome=EventOutcome.SUCCESS
+                outcome=EventOutcome.SUCCESS,
             )
 
             assert event is not None
@@ -272,7 +269,7 @@ class TestAuditEvent:
                 sender_agency="dot",
                 receiver_agency="gsa",
                 stage="sender",
-                outcome=outcome
+                outcome=outcome,
             )
 
             assert event.outcome == outcome
@@ -294,7 +291,7 @@ class TestAuditEvent:
             sender_agency="dot",
             receiver_agency="",
             stage="sender",
-            outcome=EventOutcome.SUCCESS
+            outcome=EventOutcome.SUCCESS,
         )
         assert event.sender_agency == "dot"
         assert event.receiver_agency == ""
@@ -306,7 +303,7 @@ class TestAuditEvent:
             sender_agency="",
             receiver_agency="gsa",
             stage="receiver",
-            outcome=EventOutcome.SUCCESS
+            outcome=EventOutcome.SUCCESS,
         )
         assert event2.sender_agency == ""
         assert event2.receiver_agency == "gsa"
@@ -319,7 +316,7 @@ class TestAuditEvent:
             sender_agency="dot",
             receiver_agency="gsa",
             stage="sender",
-            outcome=EventOutcome.SUCCESS
+            outcome=EventOutcome.SUCCESS,
         )
 
         log_dict = event.to_structured_log()

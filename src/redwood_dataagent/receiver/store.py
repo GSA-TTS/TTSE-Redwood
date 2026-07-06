@@ -8,15 +8,14 @@ This module handles receiver-side storage of decompressed data to target S3 buck
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 from redwood_dataagent.audit.events import AuditEventType, EventOutcome
 from redwood_dataagent.audit.logger import log_event
+from redwood_dataagent.aws.s3 import S3Client
 from redwood_dataagent.exceptions import StorageError
 from redwood_dataagent.logging_utils import prefix_log_message
-from redwood_dataagent.aws.s3 import S3Client
 
 _logger = logging.getLogger(__name__)
 
@@ -88,9 +87,7 @@ class ReceiverTargetStore:
 
             # Step 1: Check idempotency (marker object)
             if self._is_already_stored(marker_key):
-                _logger.info(
-                    prefix_log_message("Transfer already stored (idempotency)")
-                )
+                _logger.info(prefix_log_message("Transfer already stored (idempotency)"))
 
                 # Log idempotent skip
                 log_event(
@@ -130,7 +127,7 @@ class ReceiverTargetStore:
                     total_bytes += file_size
 
             # Step 3: Create marker object (idempotency guard)
-            stored_at = datetime.now(timezone.utc).isoformat()
+            stored_at = datetime.now(UTC).isoformat()
             self._mark_stored(marker_key, transfer_session_id, file_count, total_bytes, stored_at)
 
             # Step 4: Log successful store
@@ -150,11 +147,7 @@ class ReceiverTargetStore:
                 },
             )
 
-            _logger.info(
-                prefix_log_message(
-                    f"Successfully stored {file_count} files ({total_bytes} bytes)"
-                )
-            )
+            _logger.info(prefix_log_message(f"Successfully stored {file_count} files ({total_bytes} bytes)"))
 
             return {
                 "status": "stored",
@@ -202,10 +195,7 @@ class ReceiverTargetStore:
             True if marker exists (already stored), False otherwise
         """
         try:
-            self.s3_client._client.head_object(
-                Bucket=self.target_bucket,
-                Key=marker_key
-            )
+            self.s3_client._client.head_object(Bucket=self.target_bucket, Key=marker_key)
             return True
         except Exception:
             return False
@@ -223,10 +213,7 @@ class ReceiverTargetStore:
         """
         try:
             self.s3_client._client.put_object(
-                Bucket=self.target_bucket,
-                Key=s3_key,
-                Body=file_obj,
-                ContentLength=file_size
+                Bucket=self.target_bucket, Key=s3_key, Body=file_obj, ContentLength=file_size
             )
         except Exception as e:
             error_msg = f"Failed to upload {s3_key} to s3://{self.target_bucket}/: {str(e)}"
@@ -267,11 +254,7 @@ class ReceiverTargetStore:
                 Body=json.dumps(marker_metadata).encode("utf-8"),
             )
 
-            _logger.info(
-                prefix_log_message(
-                    f"Created marker object {marker_key} for idempotency"
-                )
-            )
+            _logger.info(prefix_log_message(f"Created marker object {marker_key} for idempotency"))
 
         except Exception as e:
             error_msg = f"Failed to create marker for {transfer_session_id}: {str(e)}"

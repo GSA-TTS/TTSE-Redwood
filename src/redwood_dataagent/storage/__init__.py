@@ -20,7 +20,7 @@ Example usage:
         build_sender_bucket,
         build_receiver_bucket,
     )
-    
+
     # Build bucket names for sender (DOT) and receiver (GSA)
     sender_bucket = build_sender_bucket(
         agency="dot",
@@ -28,21 +28,21 @@ Example usage:
         purpose=StoragePurpose.STAGING,
     )
     # Result: "tts-core-dev-dot-data-staging"
-    
+
     receiver_bucket = build_receiver_bucket(
         agency="gsa",
         environment="dev",
         purpose="landing",
     )
     # Result: "tts-core-dev-gsa-data-landing"
-    
+
     # Build transfer paths with manifest
     transfer_path = FileModeStoragePath.transfers(
         transfer_session_id="transfer-001",
         file_name="data.tar.gz",
     )
     # Result: "file_mode/transfers/transfer-001/data.tar.gz"
-    
+
     manifest_path = FileModeStoragePath.transfers(
         transfer_session_id="transfer-001",
         file_name="manifest.json",
@@ -54,7 +54,7 @@ Example usage:
         file_name="results.csv",
     )
     # Result: "query_mode/transfers/transfer-002/results.csv"
-    
+
     # Build extraction paths on receiver
     extracted_path = ReceiverStoragePath.extracted(
         transfer_session_id="transfer-001",
