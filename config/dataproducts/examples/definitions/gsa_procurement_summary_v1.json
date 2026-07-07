@@ -1,0 +1,130 @@
+{
+  "dataproduct_id": "gsa_procurement_summary",
+  "name": "GSA Procurement Summary",
+  "version": "1.0.0",
+  "status": "draft",
+  "owner_agency": "gsa",
+  "data_owner": {
+    "name": "GSA Procurement Data Steward",
+    "team": "GSA Finance and Acquisition",
+    "contact_email": "gsa.procurement.owner@example.gov"
+  },
+  "access": {
+    "allowed_requesting_agencies": [
+      "dot",
+      "faa",
+      "tts"
+    ],
+    "allowed_requesting_roles": [
+      "program_manager",
+      "financial_analyst"
+    ],
+    "approval_policy": "dual_approval",
+    "classification_tags": [
+      "CUI",
+      "PROCUREMENT"
+    ],
+    "retention_policy_days": 3650
+  },
+  "extraction": {
+    "source_type": "sql",
+    "engine": "postgres",
+    "template_id": "dot_contract_extract_v1",
+    "required_params": [
+      {
+        "name": "schema",
+        "type": "string",
+        "allowed_values": [
+          "gsa"
+        ]
+      },
+      {
+        "name": "table",
+        "type": "string",
+        "allowed_values": [
+          "contract_data"
+        ]
+      }
+    ],
+    "optional_params": [
+      {
+        "name": "award_date_min",
+        "type": "date"
+      },
+      {
+        "name": "award_date_max",
+        "type": "date"
+      },
+      {
+        "name": "agency_code",
+        "type": "string"
+      }
+    ],
+    "default_row_limit": 10000,
+    "max_row_limit": 100000,
+    "default_timeout_seconds": 180,
+    "max_timeout_seconds": 300,
+    "allowed_select_fields": [
+      "contract_id",
+      "piid",
+      "vendor_name",
+      "contract_value",
+      "award_date",
+      "agency_code"
+    ],
+    "allowed_filters": [
+      {
+        "field": "award_date",
+        "operators": [
+          "min",
+          "max"
+        ]
+      },
+      {
+        "field": "agency_code",
+        "operators": [
+          "equal",
+          "in"
+        ]
+      }
+    ]
+  },
+  "delivery": {
+    "output_format": "csv",
+    "naming_convention": "gsa_procurement_summary_{request_id}.csv",
+    "delivery_targets": [
+      {
+        "target_id": "default_s3_receiver_landing",
+        "type": "s3",
+        "description": "Receiver landing bucket route"
+      }
+    ],
+    "manifest_requirements": [
+      "transfer_session_id",
+      "dataproduct_id",
+      "request_id",
+      "checksum",
+      "record_count",
+      "classification_tags"
+    ]
+  },
+  "operations": {
+    "schedule_constraints": {
+      "enabled": false,
+      "allowed_utc_windows": []
+    },
+    "idempotency_scope": "request_id",
+    "audit_level": "verbose",
+    "notifications": {
+      "on_request": [
+        "gsa-data-approvals@example.gov"
+      ],
+      "on_success": [
+        "gsa-data-ops@example.gov"
+      ],
+      "on_failure": [
+        "gsa-data-support@example.gov"
+      ]
+    }
+  }
+}

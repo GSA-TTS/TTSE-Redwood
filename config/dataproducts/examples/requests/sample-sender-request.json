@@ -1,0 +1,30 @@
+{
+  "request_id": "REQ-20260706-0001",
+  "dataproduct_id": "dot_contract_extract",
+  "requesting_agency": "dot",
+  "requested_by": "sender-agent@dot.gov",
+  "params": {
+    "schema": "dot",
+    "table": "contract_data",
+    "filters": {
+      "contract_value": {
+        "min": 1000000
+      },
+      "award_date": {
+        "min": "2026-01-01"
+      }
+    },
+    "select_fields": [
+      "contract_id",
+      "piid",
+      "vendor_name",
+      "contract_value",
+      "award_date"
+    ],
+    "order_by": "award_date DESC"
+  },
+  "requested_row_limit": 5000,
+  "requested_timeout_seconds": 120,
+  "delivery_target_id": "default_sftp_receiver",
+  "justification": "Monthly high-value contract oversight extract."
+}

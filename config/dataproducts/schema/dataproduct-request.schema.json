@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttse-redwood.local/schemas/dataproduct-request.schema.json",
+  "title": "DataproductRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "dataproduct_id",
+    "requesting_agency",
+    "requested_by",
+    "params"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "dataproduct_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "requesting_agency": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 50
+    },
+    "requested_by": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 200
+    },
+    "params": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true
+    },
+    "requested_row_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000000
+    },
+    "requested_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "delivery_target_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 120
+    },
+    "justification": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "integer", "boolean"]
+      },
+      "default": {}
+    }
+  }
+}
