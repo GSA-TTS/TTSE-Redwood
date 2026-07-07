@@ -53,7 +53,7 @@ def sample_archive():
 @pytest.fixture
 def sample_manifest(sample_archive):
     """Create a sample manifest for testing.
-    
+
     Manifest now includes 2 file entries:
     1. Source file (file_name, file_size_bytes, checksum_sha256)
     2. Archive file (zip_file_name, zip_file_size_bytes, checksum_sha256)
@@ -79,7 +79,7 @@ def sample_manifest(sample_archive):
                 "zip_file_name": "transfer.tar.gz",
                 "zip_file_size_bytes": len(sample_archive),
                 "checksum_sha256": archive_checksum,
-            }
+            },
         ],
     }
 
@@ -91,14 +91,14 @@ class TestReceiverLandingZoneFetch:
         """Test successful fetch of archive and manifest from S3 landing."""
         # Mock S3 responses
         manifest_bytes = json.dumps(sample_manifest).encode("utf-8")
-        
+
         # Create mock response objects
         manifest_response = {"Body": mock.MagicMock()}
         manifest_response["Body"].read.return_value = manifest_bytes
-        
+
         archive_response = {"Body": mock.MagicMock()}
         archive_response["Body"].read.return_value = sample_archive
-        
+
         # Setup get_object to return manifest, then archive
         def get_object_side_effect(**kwargs):
             if "manifest.json" in kwargs["Key"]:
@@ -106,7 +106,7 @@ class TestReceiverLandingZoneFetch:
             elif "transfer.tar.gz" in kwargs["Key"]:
                 return archive_response
             raise ValueError(f"Unexpected key: {kwargs['Key']}")
-        
+
         receiver_landing_zone.s3_client._client.get_object.side_effect = get_object_side_effect
 
         archive_bytes, manifest_dict = receiver_landing_zone.fetch_from_landing_bucket(
@@ -162,9 +162,7 @@ class TestReceiverLandingZoneFetch:
 
     def test_fetch_missing_manifest(self, receiver_landing_zone):
         """Test fetch fails when manifest is not found in S3."""
-        receiver_landing_zone.s3_client._client.get_object.side_effect = Exception(
-            "NoSuchKey"
-        )
+        receiver_landing_zone.s3_client._client.get_object.side_effect = Exception("NoSuchKey")
 
         with pytest.raises(StorageError, match="Failed to download"):
             receiver_landing_zone.fetch_from_landing_bucket(
@@ -175,9 +173,7 @@ class TestReceiverLandingZoneFetch:
 
     def test_fetch_s3_error(self, receiver_landing_zone):
         """Test fetch fails on S3 error."""
-        receiver_landing_zone.s3_client._client.get_object.side_effect = Exception(
-            "AccessDenied"
-        )
+        receiver_landing_zone.s3_client._client.get_object.side_effect = Exception("AccessDenied")
 
         with pytest.raises(StorageError, match="Failed to download"):
             receiver_landing_zone.fetch_from_landing_bucket(
@@ -190,9 +186,7 @@ class TestReceiverLandingZoneFetch:
 class TestReceiverLandingZoneValidate:
     """Tests for ReceiverLandingZone.validate_manifest method."""
 
-    def test_validate_manifest_success(
-        self, receiver_landing_zone, sample_archive, sample_manifest
-    ):
+    def test_validate_manifest_success(self, receiver_landing_zone, sample_archive, sample_manifest):
         """Test successful manifest validation with matching checksum."""
         manifest = receiver_landing_zone.validate_manifest(
             manifest_dict=sample_manifest,
@@ -223,9 +217,7 @@ class TestReceiverLandingZoneValidate:
 
         assert manifest.transfer_session_id == "transfer-20260406-001"
 
-    def test_validate_manifest_checksum_mismatch(
-        self, receiver_landing_zone, sample_archive, sample_manifest
-    ):
+    def test_validate_manifest_checksum_mismatch(self, receiver_landing_zone, sample_archive, sample_manifest):
         """Test validation fails when archive checksum doesn't match manifest."""
         # Corrupt the archive entry (files[1]) checksum
         sample_manifest["files"][1]["checksum_sha256"] = (
@@ -254,9 +246,7 @@ class TestReceiverLandingZoneValidate:
                 receiver_agency="gsa",
             )
 
-    def test_validate_manifest_wrong_file_count(
-        self, receiver_landing_zone, sample_archive, sample_manifest
-    ):
+    def test_validate_manifest_wrong_file_count(self, receiver_landing_zone, sample_archive, sample_manifest):
         """Test validation fails when file count doesn't match (expected 2: source + archive)."""
         # Add extra file entry (3 files when 2 are expected)
         sample_manifest["files"].append(
@@ -481,26 +471,24 @@ class TestReceiverLandingZoneDiscovery:
 class TestReceiverLandingZoneIntegration:
     """Integration tests for complete landing zone workflow."""
 
-    def test_complete_landing_workflow(
-        self, receiver_landing_zone, sample_archive, sample_manifest, tmp_path
-    ):
+    def test_complete_landing_workflow(self, receiver_landing_zone, sample_archive, sample_manifest, tmp_path):
         """Test complete workflow: fetch -> validate -> decompress."""
         # Mock S3 responses
         manifest_bytes = json.dumps(sample_manifest).encode("utf-8")
-        
+
         manifest_response = {"Body": mock.MagicMock()}
         manifest_response["Body"].read.return_value = manifest_bytes
-        
+
         archive_response = {"Body": mock.MagicMock()}
         archive_response["Body"].read.return_value = sample_archive
-        
+
         def get_object_side_effect(**kwargs):
             if "manifest.json" in kwargs["Key"]:
                 return manifest_response
             elif "transfer.tar.gz" in kwargs["Key"]:
                 return archive_response
             raise ValueError(f"Unexpected key: {kwargs['Key']}")
-        
+
         receiver_landing_zone.s3_client._client.get_object.side_effect = get_object_side_effect
 
         # Step 1: Fetch

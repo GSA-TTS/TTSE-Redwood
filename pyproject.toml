@@ -23,6 +23,7 @@ dependencies = [
 test = [
   "pytest>=8.0.0",
   "pytest-cov>=5.0.0",
+  "ruff>=0.6.0",
 ]
 
 # Setuptools src layout
@@ -42,3 +43,31 @@ addopts = "--cov=src/redwood_dataagent --cov-report=xml:coverage/coverage.xml --
 # docker cp and remain resolvable by SonarQube in the Jenkins workspace.
 [tool.coverage.run]
 relative_files = true
+
+# Ruff linter configuration
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "F",    # Pyflakes
+  "I",    # isort (import sorting)
+  "N",    # pep8-naming
+  "UP",   # pyupgrade
+  "B",    # flake8-bugbear
+  "C4",   # flake8-comprehensions
+]
+ignore = [
+  "E501",  # line-too-long (handled by formatter)
+  "W191",  # indentation-contains-tabs
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["redwood_dataagent"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F841"]  # Unused variable in tests is often intentional

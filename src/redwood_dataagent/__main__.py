@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """CLI entrypoint for running the Redwood Data Agent package."""
+
+from __future__ import annotations
 
 import signal
 import sys
@@ -20,7 +20,7 @@ from .logging_utils import (
 
 def main() -> int:
     """Load configuration, initialize logging, and execute the agent.
-    
+
     After successful execution, idles indefinitely to prevent pod restart loops.
     The pod will be restarted by Flux on deployment updates or manually by scaling.
     """
@@ -28,7 +28,7 @@ def main() -> int:
         # Configure logging FIRST before using logger, so any startup errors are visible
         # Print to stdout/stderr directly before logging is configured
         print("Starting Redwood Data Agent...", file=sys.stdout, flush=True)
-        
+
         # Load initial configuration from environment variables + defaults to get log level
         # This config is used only for initial logging setup; each transfer gets its own
         initial_config = load_config()
@@ -39,7 +39,7 @@ def main() -> int:
 
         # Get logger after logging is configured
         logger = get_logger("redwood_dataagent")
-        
+
         logger.info(
             prefix_log_message(
                 "Redwood Data Agent initializing",
@@ -64,17 +64,17 @@ def main() -> int:
                 "interval_seconds": 300,
             },
         )
-        
-        SCHEDULER_INTERVAL = 300  # 5 minutes in seconds
-        
+
+        scheduler_interval = 300  # 5 minutes in seconds
+
         def handle_sigterm(signum, frame):
             """Handle SIGTERM gracefully - exit the scheduler loop."""
             logger.info("SIGTERM received, shutting down gracefully")
             raise KeyboardInterrupt()
-        
+
         # Register SIGTERM handler for graceful shutdown
         signal.signal(signal.SIGTERM, handle_sigterm)
-        
+
         try:
             while True:
                 # Load fresh config for each transfer to get a new transfer_session_id
@@ -95,24 +95,24 @@ def main() -> int:
                     extra={"event": "workflow_start", "agent_mode": config.agent_mode},
                 )
                 result = run_agent(config)
-                
+
                 if result == 0:
                     logger.info(
                         prefix_log_message(
-                            f"Agent workflow completed, sleeping {SCHEDULER_INTERVAL}s until next run",
+                            f"Agent workflow completed, sleeping {scheduler_interval}s until next run",
                             agent_mode=config.agent_mode,
                             transfer_session_id=config.transfer_session_id,
                         ),
                         extra={
                             "event": "agent_sleep",
                             "agent_mode": config.agent_mode,
-                            "sleep_seconds": SCHEDULER_INTERVAL,
+                            "sleep_seconds": scheduler_interval,
                         },
                     )
                 else:
                     logger.error(
                         prefix_log_message(
-                            f"Agent workflow failed with exit code {result}, sleeping {SCHEDULER_INTERVAL}s until retry",
+                            f"Agent workflow failed with exit code {result}, sleeping {scheduler_interval}s until retry",
                             agent_mode=config.agent_mode,
                             transfer_session_id=config.transfer_session_id,
                         ),
@@ -120,22 +120,22 @@ def main() -> int:
                             "event": "agent_failure",
                             "agent_mode": config.agent_mode,
                             "exit_code": result,
-                            "sleep_seconds": SCHEDULER_INTERVAL,
+                            "sleep_seconds": scheduler_interval,
                         },
                     )
-                
+
                 # Sleep until next scheduled run
-                time.sleep(SCHEDULER_INTERVAL)
+                time.sleep(scheduler_interval)
         except KeyboardInterrupt:
             logger.info(prefix_log_message("Scheduler loop terminated, agent shutting down"))
             return 0
-        
+
     except Exception as e:
         # Catch any exceptions during startup or execution and log them to stderr
         # This ensures we see startup errors even if logging isn't configured yet
         error_msg = f"Fatal error in Redwood Data Agent: {e}\n{traceback.format_exc()}"
         print(error_msg, file=sys.stderr, flush=True)
-        
+
         # Try to log via logger if it's available
         try:
             logger = get_logger("redwood_dataagent")
@@ -150,7 +150,7 @@ def main() -> int:
         except Exception:
             # If logger isn't available, logging error already went to stderr above
             pass
-        
+
         return 1
 
 

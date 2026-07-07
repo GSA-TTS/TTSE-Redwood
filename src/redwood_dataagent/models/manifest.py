@@ -6,7 +6,7 @@ sender-generated metadata that the receiver uses as the source of truth for
 integrity validation before decompression and target storage.
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -28,15 +28,14 @@ class ManifestFile(BaseModel):
     """File-level metadata entry used by receiver-side integrity checks."""
 
     file_name: str = Field(..., min_length=1, description="Transferred file name")
-    file_size_bytes: int = Field(
-        ..., ge=0, description="Transferred file size in bytes"
-    )
+    file_size_bytes: int = Field(..., ge=0, description="Transferred file size in bytes")
     checksum_sha256: str = Field(
         ...,
         min_length=64,
         max_length=64,
         description="64-character SHA-256 hex digest",
     )
+
     @field_validator("file_name")
     @classmethod
     def validate_file_name(cls, value: str) -> str:
@@ -85,38 +84,26 @@ class TransferManifest(BaseModel):
         }
     )
 
-    manifest_version: str = Field(
-        default="1.0", min_length=1, description="Manifest schema version"
-    )
-    transfer_session_id: str = Field(
-        ..., min_length=1, description="Correlation ID for one transfer session"
-    )
+    manifest_version: str = Field(default="1.0", min_length=1, description="Manifest schema version")
+    transfer_session_id: str = Field(..., min_length=1, description="Correlation ID for one transfer session")
     sender_agency: str = Field(..., min_length=1, description="Sender agency code")
-    receiver_agency: str = Field(
-        default="", description="Receiver agency code"
-    )
+    receiver_agency: str = Field(default="", description="Receiver agency code")
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="UTC timestamp when the manifest was generated",
     )
     checksum_algorithm: ChecksumAlgorithm = Field(
         default=ChecksumAlgorithm.SHA256,
         description="Checksum algorithm used for all file entries",
     )
-    total_file_count: int = Field(
-        ..., ge=1, description="Declared number of files in the manifest"
-    )
-    files: list[ManifestFile] = Field(
-        ..., min_length=1, description="Per-file metadata entries"
-    )
+    total_file_count: int = Field(..., ge=1, description="Declared number of files in the manifest")
+    files: list[ManifestFile] = Field(..., min_length=1, description="Per-file metadata entries")
 
     compression_type: CompressionType = Field(
         default=CompressionType.GZIP,
         description="Compression format for payload artifacts",
     )
-    transfer_date: date | None = Field(
-        default=None, description="Optional transfer date for operational tracing"
-    )
+    transfer_date: date | None = Field(default=None, description="Optional transfer date for operational tracing")
     business_date: date | None = Field(
         default=None,
         description="Optional business-effective date for downstream consumers",

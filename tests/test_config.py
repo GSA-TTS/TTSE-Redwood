@@ -5,10 +5,10 @@ import pytest
 from redwood_dataagent.config import AgentConfig, load_config
 from redwood_dataagent.exceptions import ConfigurationError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reset env vars used by load_config() and seed required baseline defaults."""
@@ -22,7 +22,8 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LOG_LEVEL",
         "SENDER_DATA_DIRECTORY",
         "SFTP_ENDPOINTS",
-        "SFTP_SECRETS_MANAGER_NAME",
+        "SFTP_USERNAME",
+        "SFTP_PRIVATE_KEY",
         "SENDER_INPUT_MODE",
         "SENDER_QUERY_INPUT_JSON",
         "MAX_QUERY_ROW_LIMIT",
@@ -31,11 +32,17 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
     monkeypatch.setenv("SFTP_ENDPOINTS", "sftp.example.com")
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.setenv(
+        "SFTP_PRIVATE_KEY",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----",
+    )
 
 
 # ---------------------------------------------------------------------------
 # Default values
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-agency defaults are applied correctly; AGENCY must be explicitly set."""
@@ -77,7 +84,7 @@ def test_load_config_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AGENCY", "gsa")
     config = load_config()
 
-    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
+    with pytest.raises(Exception):  # noqa: B017 # dataclasses.FrozenInstanceError
         config.agent_mode = "sender"  # type: ignore[misc]
 
 
@@ -156,6 +163,7 @@ def test_load_config_query_caps_invalid_non_positive_raises(monkeypatch: pytest.
 # AGENT_MODE
 # ---------------------------------------------------------------------------
 
+
 def test_load_config_agent_mode_sender(monkeypatch: pytest.MonkeyPatch) -> None:
     """AGENT_MODE=sender is accepted and stored in lowercase."""
     _clear_all_env(monkeypatch)
@@ -189,6 +197,7 @@ def test_load_config_invalid_agent_mode(monkeypatch: pytest.MonkeyPatch) -> None
 # ---------------------------------------------------------------------------
 # Agency names
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_agency_sender_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """AGENCY is mapped to sender_agency when AGENT_MODE=sender."""
@@ -240,6 +249,7 @@ def test_load_config_blank_agency_raises(monkeypatch: pytest.MonkeyPatch) -> Non
 # Environment
 # ---------------------------------------------------------------------------
 
+
 def test_load_config_blank_environment_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A blank ENVIRONMENT value raises ConfigurationError."""
     _clear_all_env(monkeypatch)
@@ -253,6 +263,7 @@ def test_load_config_blank_environment_raises(monkeypatch: pytest.MonkeyPatch) -
 # ---------------------------------------------------------------------------
 # Derived bucket names
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_sender_staging_bucket_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default DOT sender staging bucket follows the naming convention."""
@@ -385,6 +396,7 @@ def test_load_config_day1_gsa_receiver_scenario(monkeypatch: pytest.MonkeyPatch)
 # transfer_session_id
 # ---------------------------------------------------------------------------
 
+
 def test_load_config_generates_transfer_session_id_when_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -425,6 +437,7 @@ def test_load_config_unique_session_ids_generated(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 # LOG_LEVEL normalisation
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_log_level_normalised_to_uppercase(
     monkeypatch: pytest.MonkeyPatch,
@@ -473,6 +486,7 @@ def test_load_config_sender_data_directory_derived_from_sender_bucket(
 # ConfigurationError is a domain exception (not a bare ValueError)
 # ---------------------------------------------------------------------------
 
+
 def test_configuration_error_is_not_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """ConfigurationError must not be a subclass of ValueError."""
     monkeypatch.setenv("AGENT_MODE", "bad")
@@ -494,6 +508,7 @@ def test_configuration_error_is_not_value_error(monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------------------
 # SFTP Configuration
 # ---------------------------------------------------------------------------
+
 
 def test_load_config_sftp_endpoints_single_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     """SFTP_ENDPOINTS can be a single IP address."""
@@ -549,6 +564,10 @@ def test_load_config_sftp_endpoints_whitespace_trimmed(monkeypatch: pytest.Monke
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("SFTP_ENDPOINTS", "  10.0.1.50 , 10.0.2.50  ")
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.setenv(
+        "SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----"
+    )
 
     config = load_config()
 
@@ -561,6 +580,8 @@ def test_load_config_sftp_endpoints_required(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.delenv("SFTP_ENDPOINTS", raising=False)
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.setenv("SFTP_PRIVATE_KEY", "test-key")
 
     with pytest.raises(ConfigurationError, match="SFTP_ENDPOINTS"):
         load_config()
@@ -572,6 +593,8 @@ def test_load_config_sftp_endpoints_blank_raises(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("SFTP_ENDPOINTS", "   ")
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.setenv("SFTP_PRIVATE_KEY", "test-key")
 
     with pytest.raises(ConfigurationError, match="SFTP_ENDPOINTS"):
         load_config()
@@ -583,65 +606,72 @@ def test_load_config_sftp_endpoints_empty_values_raises(monkeypatch: pytest.Monk
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50,,10.0.2.50")
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.setenv("SFTP_PRIVATE_KEY", "test-key")
 
     with pytest.raises(ConfigurationError, match="empty values"):
         load_config()
 
 
-def test_load_config_sftp_secrets_manager_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SFTP_SECRETS_MANAGER_NAME is auto-derived if not provided."""
-    _clear_all_env(monkeypatch)
-    monkeypatch.setenv("AGENT_MODE", "sender")
-    monkeypatch.setenv("AGENCY", "dot")
-    monkeypatch.setenv("ENVIRONMENT", "dev")
-    monkeypatch.setenv("TENANT", "tts")
-    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
-
-    config = load_config()
-
-    assert config.sftp_secrets_manager_name == "tts-core-dev-redwood-sftp-credentials"
-
-
-def test_load_config_sftp_secrets_manager_custom_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SFTP_SECRETS_MANAGER_NAME uses custom tenant in auto-derived name."""
-    _clear_all_env(monkeypatch)
-    monkeypatch.setenv("AGENT_MODE", "sender")
-    monkeypatch.setenv("AGENCY", "dot")
-    monkeypatch.setenv("ENVIRONMENT", "prod")
-    monkeypatch.setenv("TENANT", "custom-tenant")
-    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
-
-    config = load_config()
-
-    assert config.sftp_secrets_manager_name == "custom-tenant-core-prod-redwood-sftp-credentials"
-
-
-def test_load_config_sftp_secrets_manager_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Explicit SFTP_SECRETS_MANAGER_NAME is used when provided."""
+def test_load_config_sftp_username_and_private_key_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sender mode loads SFTP username/private key directly from env vars."""
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
-    monkeypatch.setenv("SFTP_SECRETS_MANAGER_NAME", "my-custom-secret")
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.setenv(
+        "SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----"
+    )
 
     config = load_config()
 
-    assert config.sftp_secrets_manager_name == "my-custom-secret"
+    assert config.sftp_username == "dot-sender"
+    assert "BEGIN OPENSSH PRIVATE KEY" in config.sftp_private_key
+
+
+def test_load_config_sftp_username_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_USERNAME is required in sender mode."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
+    monkeypatch.delenv("SFTP_USERNAME", raising=False)
+    monkeypatch.setenv("SFTP_PRIVATE_KEY", "test-key")
+
+    with pytest.raises(ConfigurationError, match="SFTP_USERNAME"):
+        load_config()
+
+
+def test_load_config_sftp_private_key_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SFTP_PRIVATE_KEY is required in sender mode."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50")
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.delenv("SFTP_PRIVATE_KEY", raising=False)
+
+    with pytest.raises(ConfigurationError, match="SFTP_PRIVATE_KEY"):
+        load_config()
 
 
 def test_load_config_sftp_full_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Full SFTP configuration scenario with multiple endpoints and custom secret."""
+    """Full SFTP configuration scenario with multiple endpoints and env credentials."""
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "sender")
     monkeypatch.setenv("AGENCY", "dot")
     monkeypatch.setenv("ENVIRONMENT", "dev")
     monkeypatch.setenv("SFTP_ENDPOINTS", "10.0.1.50,10.0.2.50,10.0.3.50")
-    monkeypatch.setenv("SFTP_SECRETS_MANAGER_NAME", "tts-core-dev-redwood-sftp-credentials")
+    monkeypatch.setenv("SFTP_USERNAME", "dot-sender")
+    monkeypatch.setenv(
+        "SFTP_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----"
+    )
 
     config = load_config()
 
     assert config.sftp_endpoints == ["10.0.1.50", "10.0.2.50", "10.0.3.50"]
-    assert config.sftp_secrets_manager_name == "tts-core-dev-redwood-sftp-credentials"
+    assert config.sftp_username == "dot-sender"
     assert config.agent_mode == "sender"
     assert config.environment == "dev"
 
@@ -649,14 +679,16 @@ def test_load_config_sftp_full_scenario(monkeypatch: pytest.MonkeyPatch) -> None
 def test_load_config_receiver_does_not_require_sftp_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Receiver mode should load without SFTP_ENDPOINTS or SFTP_SECRETS_MANAGER_NAME."""
+    """Receiver mode should load without sender-specific SFTP settings."""
     _clear_all_env(monkeypatch)
     monkeypatch.setenv("AGENT_MODE", "receiver")
     monkeypatch.setenv("AGENCY", "gsa")
     monkeypatch.delenv("SFTP_ENDPOINTS", raising=False)
-    monkeypatch.delenv("SFTP_SECRETS_MANAGER_NAME", raising=False)
+    monkeypatch.delenv("SFTP_USERNAME", raising=False)
+    monkeypatch.delenv("SFTP_PRIVATE_KEY", raising=False)
 
     config = load_config()
 
     assert config.sftp_endpoints == []
-    assert config.sftp_secrets_manager_name == ""
+    assert config.sftp_username == ""
+    assert config.sftp_private_key == ""

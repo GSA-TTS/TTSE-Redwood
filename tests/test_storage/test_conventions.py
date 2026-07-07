@@ -1,6 +1,7 @@
 """Tests for storage naming conventions and path builders."""
 
 import pytest
+from pydantic import ValidationError
 
 from redwood_dataagent.storage import (
     FileModeStoragePath,
@@ -184,6 +185,21 @@ class TestFileModeStoragePath:
         with pytest.raises(ValueError, match="path component cannot be blank"):
             FileModeStoragePath.transfers("transfer-001", "   ")
 
+    def test_transfer_prefix(self):
+        """Verify file-mode transfer prefix format."""
+        prefix = FileModeStoragePath.transfer_prefix("transfer-001")
+        assert prefix == "file_mode/transfers/transfer-001/"
+
+    def test_transfer_prefix_blank_raises(self):
+        """Verify blank transfer_session_id in transfer_prefix raises ValueError."""
+        with pytest.raises(ValueError, match="path component cannot be blank"):
+            FileModeStoragePath.transfer_prefix("   ")
+
+    def test_model_validation_rejects_blank_transfer_session_id(self):
+        """Model-level validator rejects whitespace transfer_session_id."""
+        with pytest.raises(ValidationError, match="path component cannot be blank"):
+            FileModeStoragePath(transfer_session_id="   ", file_name="manifest.json")
+
 
 class TestQueryModeStoragePath:
     """Test query-mode sender path builders."""
@@ -205,6 +221,24 @@ class TestQueryModeStoragePath:
         """Verify query-mode transfers path format."""
         path = QueryModeStoragePath.transfers("transfer-001", "results.csv")
         assert path == "query_mode/transfers/transfer-001/results.csv"
+
+    def test_transfer_prefix(self):
+        """Verify query-mode transfer prefix format."""
+        prefix = QueryModeStoragePath.transfer_prefix("transfer-001")
+        assert prefix == "query_mode/transfers/transfer-001/"
+
+    def test_processed_marker_blank_inputs_raise(self):
+        """Verify processed marker rejects blank template_id and fingerprint."""
+        with pytest.raises(ValueError, match="path component cannot be blank"):
+            QueryModeStoragePath.processed_marker("", "abc123")
+
+        with pytest.raises(ValueError, match="path component cannot be blank"):
+            QueryModeStoragePath.processed_marker("dot_contract_extract_v1", "   ")
+
+    def test_model_validation_rejects_blank_file_name(self):
+        """Model-level validator rejects whitespace file_name."""
+        with pytest.raises(ValidationError, match="path component cannot be blank"):
+            QueryModeStoragePath(transfer_session_id="transfer-001", file_name="   ")
 
 
 class TestReceiverStoragePath:
@@ -291,6 +325,11 @@ class TestReceiverStoragePath:
         """Verify whitespace file_name in extracted raises ValueError."""
         with pytest.raises(ValueError, match="path component cannot be blank"):
             ReceiverStoragePath.extracted("transfer-001", "   ")
+
+    def test_model_validation_rejects_blank_transfer_session_id(self):
+        """Receiver model validator rejects whitespace transfer_session_id."""
+        with pytest.raises(ValidationError, match="path component cannot be blank"):
+            ReceiverStoragePath(transfer_session_id="   ", file_name="records.csv")
 
 
 class TestStorageConventionsIntegration:

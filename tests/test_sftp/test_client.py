@@ -105,10 +105,7 @@ class TestSFTPClientInit:
 
     def test_init_no_auth_method_fails(self):
         """Test initialization fails when no auth method provided."""
-        with pytest.raises(
-            SFTPError,
-            match="Either password, key_path, or key_content must be provided"
-        ):
+        with pytest.raises(SFTPError, match="Either password, key_path, or key_content must be provided"):
             SFTPClient(
                 hosts=["receiver.example.com"],
                 username="sender",
@@ -166,9 +163,7 @@ class TestSFTPClientUpload:
         mock_sftp.close.assert_called_once()
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
-    def test_upload_to_multiple_hosts_endpoint_in_metadata(
-        self, mock_connect, tmp_path
-    ):
+    def test_upload_to_multiple_hosts_endpoint_in_metadata(self, mock_connect, tmp_path):
         """Test upload includes the actual connected endpoint in metadata."""
         mock_sftp = mock.MagicMock()
 
@@ -221,9 +216,7 @@ class TestSFTPClientUpload:
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
     def test_upload_auth_error(self, mock_connect, tmp_path):
         """Test upload fails immediately on authentication error."""
-        mock_connect.side_effect = SFTPError(
-            "SFTP authentication failed for sender@receiver.example.com"
-        )
+        mock_connect.side_effect = SFTPError("SFTP authentication failed for sender@receiver.example.com")
 
         source_file = tmp_path / "archive.tar.gz"
         source_file.write_text("content")
@@ -390,9 +383,7 @@ class TestSFTPClientDelete:
         )
         client.delete_file("/outgoing/failed-upload.tar.gz")
 
-        mock_sftp.remove.assert_called_once_with(
-            "/outgoing/failed-upload.tar.gz"
-        )
+        mock_sftp.remove.assert_called_once_with("/outgoing/failed-upload.tar.gz")
 
     @mock.patch("redwood_dataagent.sftp.client.SFTPClient._connect")
     def test_delete_not_found(self, mock_connect):
@@ -493,7 +484,7 @@ class TestSFTPClientConnect:
     @mock.patch("paramiko.RSAKey")
     @mock.patch("paramiko.SSHClient")
     def test_connect_with_key_content(self, mock_ssh_class, mock_rsa_key):
-        """Test _connect with key content (from Secrets Manager)."""
+        """Test _connect with key content (from injected env credentials)."""
         key_content = "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
         mock_key_instance = mock.MagicMock()
         mock_rsa_key.from_private_key.return_value = mock_key_instance
@@ -597,7 +588,7 @@ class TestSFTPClientConnect:
             password="wrong",
         )
 
-        with pytest.raises(SFTPError, match="Check credentials in Secrets Manager"):
+        with pytest.raises(SFTPError, match="Check injected SFTP credentials"):
             client._connect()
 
     @mock.patch("paramiko.SSHClient")
@@ -620,7 +611,7 @@ class TestSFTPClientConnect:
             password="wrong",
         )
 
-        with pytest.raises(SFTPError, match="Check credentials in Secrets Manager"):
+        with pytest.raises(SFTPError, match="Check injected SFTP credentials"):
             client._connect()
 
         assert mock_ssh_class.call_count == 1
@@ -680,11 +671,11 @@ class TestSFTPClientConnect:
         """Test _connect fails over to second endpoint when first fails."""
         mock_ssh_fails = mock.MagicMock()
         mock_ssh_fails.connect.side_effect = OSError("Connection refused")
-        
+
         mock_ssh_works = mock.MagicMock()
         mock_sftp = mock.MagicMock()
         mock_ssh_works.open_sftp.return_value = mock_sftp
-        
+
         # First call returns failing SSH, second returns working SSH
         mock_ssh_class.side_effect = [mock_ssh_fails, mock_ssh_works]
 
@@ -739,7 +730,7 @@ class TestSFTPClientConnect:
         assert client._connected_host is None
         assert len(created_ssh_clients) == 3
 
-        for expected_host, ssh_client in zip(client._hosts, created_ssh_clients):
+        for expected_host, ssh_client in zip(client._hosts, created_ssh_clients, strict=False):
             ssh_client.connect.assert_called_once_with(
                 expected_host,
                 port=22,
@@ -747,7 +738,6 @@ class TestSFTPClientConnect:
                 password="secret",
                 timeout=60,
             )
-        
+
         # Verify all endpoints were attempted
         assert mock_ssh_class.call_count == 3
-
