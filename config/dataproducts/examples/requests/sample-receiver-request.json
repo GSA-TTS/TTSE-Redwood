@@ -1,0 +1,27 @@
+{
+  "request_id": "REQ-20260706-0002",
+  "dataproduct_id": "gsa_procurement_summary",
+  "requesting_agency": "faa",
+  "requested_by": "receiver-analyst@faa.gov",
+  "params": {
+    "schema": "gsa",
+    "table": "contract_data",
+    "filters": {
+      "award_date": {
+        "min": "2026-01-01",
+        "max": "2026-06-30"
+      },
+      "agency_code": {
+        "in": [
+          "FAA",
+          "DOT"
+        ]
+      }
+    },
+    "order_by": "award_date DESC"
+  },
+  "requested_row_limit": 8000,
+  "requested_timeout_seconds": 180,
+  "delivery_target_id": "default_s3_receiver_landing",
+  "justification": "Cross-agency award trend analysis for H1 FY26."
+}
