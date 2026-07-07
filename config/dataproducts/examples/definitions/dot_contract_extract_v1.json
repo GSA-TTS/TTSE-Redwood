@@ -1,0 +1,136 @@
+{
+  "dataproduct_id": "dot_contract_extract",
+  "name": "DOT Contract Extract",
+  "version": "1.0.0",
+  "status": "active",
+  "owner_agency": "dot",
+  "data_owner": {
+    "name": "DOT Data Owner",
+    "team": "DOT Procurement Systems",
+    "contact_email": "dot.data.owner@example.gov"
+  },
+  "access": {
+    "allowed_requesting_agencies": [
+      "gsa",
+      "tts"
+    ],
+    "allowed_requesting_roles": [
+      "contract_analyst",
+      "auditor"
+    ],
+    "approval_policy": "owner_approval",
+    "classification_tags": [
+      "CUI"
+    ],
+    "retention_policy_days": 2555
+  },
+  "extraction": {
+    "source_type": "sql",
+    "engine": "postgres",
+    "template_id": "dot_contract_extract_v1",
+    "required_params": [
+      {
+        "name": "schema",
+        "type": "string",
+        "description": "Database schema name",
+        "allowed_values": [
+          "dot"
+        ]
+      },
+      {
+        "name": "table",
+        "type": "string",
+        "description": "Source table name",
+        "allowed_values": [
+          "contract_data"
+        ]
+      }
+    ],
+    "optional_params": [
+      {
+        "name": "award_date_min",
+        "type": "date",
+        "description": "Lower bound award date"
+      },
+      {
+        "name": "contract_value_min",
+        "type": "number",
+        "description": "Lower bound for contract value",
+        "min": 0
+      },
+      {
+        "name": "select_fields",
+        "type": "array",
+        "description": "Optional projection list"
+      }
+    ],
+    "default_row_limit": 5000,
+    "max_row_limit": 100000,
+    "default_timeout_seconds": 120,
+    "max_timeout_seconds": 300,
+    "allowed_select_fields": [
+      "contract_id",
+      "piid",
+      "vendor_name",
+      "contract_value",
+      "award_date",
+      "agency_code"
+    ],
+    "allowed_filters": [
+      {
+        "field": "contract_value",
+        "operators": [
+          "min",
+          "max"
+        ]
+      },
+      {
+        "field": "award_date",
+        "operators": [
+          "min",
+          "max"
+        ]
+      }
+    ]
+  },
+  "delivery": {
+    "output_format": "csv",
+    "naming_convention": "dot_contract_extract_{transfer_session_id}.csv",
+    "delivery_targets": [
+      {
+        "target_id": "default_sftp_receiver",
+        "type": "sftp",
+        "description": "Default receiver SFTP endpoint"
+      }
+    ],
+    "manifest_requirements": [
+      "transfer_session_id",
+      "dataproduct_id",
+      "request_id",
+      "checksum",
+      "record_count"
+    ]
+  },
+  "operations": {
+    "schedule_constraints": {
+      "enabled": true,
+      "allowed_utc_windows": [
+        "01:00-05:00",
+        "18:00-23:00"
+      ]
+    },
+    "idempotency_scope": "dataproduct_plus_params",
+    "audit_level": "standard",
+    "notifications": {
+      "on_request": [
+        "dot-approvals@example.gov"
+      ],
+      "on_success": [
+        "dot-data-ops@example.gov"
+      ],
+      "on_failure": [
+        "dot-support@example.gov"
+      ]
+    }
+  }
+}

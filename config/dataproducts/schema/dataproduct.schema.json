@@ -1,0 +1,407 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttse-redwood.local/schemas/dataproduct.schema.json",
+  "title": "DataproductDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dataproduct_id",
+    "name",
+    "version",
+    "status",
+    "owner_agency",
+    "data_owner",
+    "access",
+    "extraction",
+    "delivery",
+    "operations"
+  ],
+  "properties": {
+    "dataproduct_id": {
+      "type": "string",
+      "minLength": 3,
+      "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v?[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "active", "deprecated", "retired"]
+    },
+    "owner_agency": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 50
+    },
+    "data_owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "team", "contact_email"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "team": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "contact_email": {
+          "type": "string",
+          "format": "email"
+        }
+      }
+    },
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed_requesting_agencies",
+        "approval_policy",
+        "classification_tags",
+        "retention_policy_days"
+      ],
+      "properties": {
+        "allowed_requesting_agencies": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 50
+          }
+        },
+        "allowed_requesting_roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 120
+          },
+          "default": []
+        },
+        "approval_policy": {
+          "type": "string",
+          "enum": ["auto", "owner_approval", "dual_approval"]
+        },
+        "classification_tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 64
+          }
+        },
+        "retention_policy_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 36500
+        }
+      }
+    },
+    "extraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_type",
+        "engine",
+        "template_id",
+        "required_params",
+        "optional_params",
+        "default_row_limit",
+        "max_row_limit",
+        "default_timeout_seconds",
+        "max_timeout_seconds"
+      ],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": ["sql", "file"]
+        },
+        "engine": {
+          "type": "string",
+          "enum": ["postgres", "s3-file"]
+        },
+        "template_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "required_params": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/paramDefinition"
+          }
+        },
+        "optional_params": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/paramDefinition"
+          },
+          "default": []
+        },
+        "default_row_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+        },
+        "max_row_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+        },
+        "default_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "max_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "allowed_select_fields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "default": []
+        },
+        "allowed_filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/filterDefinition"
+          },
+          "default": []
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "const": "sql"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "engine": {
+                "const": "postgres"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_type": {
+                "const": "file"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "engine": {
+                "const": "s3-file"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output_format", "naming_convention", "delivery_targets", "manifest_requirements"],
+      "properties": {
+        "output_format": {
+          "type": "string",
+          "enum": ["csv", "parquet", "jsonl"]
+        },
+        "naming_convention": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "delivery_targets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/deliveryTarget"
+          }
+        },
+        "manifest_requirements": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 120
+          }
+        }
+      }
+    },
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["idempotency_scope", "audit_level", "notifications"],
+      "properties": {
+        "schedule_constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "allowed_utc_windows"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowed_utc_windows": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9]$"
+              },
+              "default": []
+            }
+          }
+        },
+        "idempotency_scope": {
+          "type": "string",
+          "enum": ["dataproduct_plus_params", "request_id", "requester_plus_params"]
+        },
+        "audit_level": {
+          "type": "string",
+          "enum": ["standard", "verbose"]
+        },
+        "notifications": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["on_request", "on_success", "on_failure"],
+          "properties": {
+            "on_request": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "email"
+              },
+              "default": []
+            },
+            "on_success": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "email"
+              },
+              "default": []
+            },
+            "on_failure": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "email"
+              },
+              "default": []
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "paramDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "date", "datetime", "array"]
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "allowed_values": {
+          "type": "array",
+          "items": {
+            "type": ["string", "integer", "number", "boolean"]
+          },
+          "default": []
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      }
+    },
+    "filterDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operators"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "operators": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["min", "max", "equal", "in"]
+          }
+        }
+      }
+    },
+    "deliveryTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_id", "type"],
+      "properties": {
+        "target_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "type": {
+          "type": "string",
+          "enum": ["s3", "sftp"]
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        }
+      }
+    }
+  }
+}
