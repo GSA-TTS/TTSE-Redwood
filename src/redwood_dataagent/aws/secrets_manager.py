@@ -54,15 +54,13 @@ class SecretsManagerClient:
         """
         try:
             import boto3
+
             # Create connection to AWS Secrets Manager
-            self._client: Any = boto3.client(
-                "secretsmanager", region_name=aws_region
-            )
+            self._client: Any = boto3.client("secretsmanager", region_name=aws_region)
             self._region = aws_region
         except ImportError as e:
             raise ImportError(
-                "boto3 is required for AWS Secrets Manager support. "
-                "Install with: pip install boto3"
+                "boto3 is required for AWS Secrets Manager support. " "Install with: pip install boto3"
             ) from e
 
         # Log connection for debugging
@@ -121,9 +119,7 @@ class SecretsManagerClient:
             try:
                 secret_dict = json.loads(secret_value)
             except json.JSONDecodeError as e:
-                raise SecretsManagerError(
-                    f"Secret '{secret_name}' is not valid JSON: {e}"
-                ) from e
+                raise SecretsManagerError(f"Secret '{secret_name}' is not valid JSON: {e}") from e
 
             # Log what we retrieved (for debugging)
             LOGGER.debug(
@@ -140,18 +136,10 @@ class SecretsManagerClient:
 
             return secret_dict
         except self._client.exceptions.ResourceNotFoundException as e:
-            raise SecretsManagerError(
-                f"Secret '{secret_name}' not found in Secrets Manager"
-            ) from e
+            raise SecretsManagerError(f"Secret '{secret_name}' not found in Secrets Manager") from e
         except self._client.exceptions.InvalidRequestException as e:
-            raise SecretsManagerError(
-                f"Invalid request for secret '{secret_name}': {e}"
-            ) from e
+            raise SecretsManagerError(f"Invalid request for secret '{secret_name}': {e}") from e
         except self._client.exceptions.InvalidParameterException as e:
-            raise SecretsManagerError(
-                f"Invalid parameters for secret '{secret_name}': {e}"
-            ) from e
+            raise SecretsManagerError(f"Invalid parameters for secret '{secret_name}': {e}") from e
         except Exception as e:
-            raise SecretsManagerError(
-                f"Failed to retrieve secret '{secret_name}': {e}"
-            ) from e
+            raise SecretsManagerError(f"Failed to retrieve secret '{secret_name}': {e}") from e

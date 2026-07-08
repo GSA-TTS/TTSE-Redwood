@@ -58,9 +58,7 @@ class StoragePurpose(str, Enum):
 class FileModeStoragePath(BaseModel):
     """Path builders for file-mode sender storage artifacts."""
 
-    transfer_session_id: str = Field(
-        ..., min_length=1, description=_TRANSFER_SESSION_ID_DESCRIPTION
-    )
+    transfer_session_id: str = Field(..., min_length=1, description=_TRANSFER_SESSION_ID_DESCRIPTION)
     file_name: str = Field(..., min_length=1, description=_FILE_NAME_DESCRIPTION)
 
     @field_validator("transfer_session_id", "file_name")
@@ -121,9 +119,7 @@ class FileModeStoragePath(BaseModel):
 class QueryModeStoragePath(BaseModel):
     """Path builders for query-mode sender storage artifacts."""
 
-    transfer_session_id: str = Field(
-        ..., min_length=1, description=_TRANSFER_SESSION_ID_DESCRIPTION
-    )
+    transfer_session_id: str = Field(..., min_length=1, description=_TRANSFER_SESSION_ID_DESCRIPTION)
     file_name: str = Field(..., min_length=1, description=_FILE_NAME_DESCRIPTION)
 
     @field_validator("transfer_session_id", "file_name")
@@ -152,10 +148,7 @@ class QueryModeStoragePath(BaseModel):
         if not fingerprint or not fingerprint.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
 
-        return (
-            f"{QUERY_MODE_PROCESSED_PREFIX}{template_id.strip()}/"
-            f"{fingerprint.strip()}.done"
-        )
+        return f"{QUERY_MODE_PROCESSED_PREFIX}{template_id.strip()}/" f"{fingerprint.strip()}.done"
 
     @staticmethod
     def transfers(transfer_session_id: str, file_name: str) -> str:
@@ -165,10 +158,7 @@ class QueryModeStoragePath(BaseModel):
         if not file_name or not file_name.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
 
-        return (
-            f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id.strip()}/"
-            f"{file_name.strip()}"
-        )
+        return f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id.strip()}/" f"{file_name.strip()}"
 
     @staticmethod
     def transfer_prefix(transfer_session_id: str) -> str:
@@ -182,9 +172,7 @@ class QueryModeStoragePath(BaseModel):
 class ReceiverStoragePath(BaseModel):
     """Path builders for receiver-side storage artifacts."""
 
-    transfer_session_id: str = Field(
-        ..., min_length=1, description=_TRANSFER_SESSION_ID_DESCRIPTION
-    )
+    transfer_session_id: str = Field(..., min_length=1, description=_TRANSFER_SESSION_ID_DESCRIPTION)
     file_name: str = Field(..., min_length=1, description=_FILE_NAME_DESCRIPTION)
 
     @field_validator("transfer_session_id", "file_name")
@@ -239,7 +227,7 @@ class ReceiverStoragePath(BaseModel):
         if sender_agency is not None:
             sender_agency = sender_agency.strip()
             return f"{sender_agency}/{transfer_session_id}/{file_name}"
-        
+
         return f"landing/{transfer_session_id}/{file_name}"
 
     @staticmethod
@@ -270,13 +258,11 @@ class ReceiverStoragePath(BaseModel):
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
         if not file_name or not file_name.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
-        
+
         return f"extracted/{transfer_session_id.strip()}/{file_name.strip()}"
 
 
-def build_sender_bucket(
-    agency: str, environment: str, purpose: StoragePurpose
-) -> str:
+def build_sender_bucket(agency: str, environment: str, purpose: StoragePurpose) -> str:
     """
     Build a sender-side storage bucket name.
 
@@ -308,9 +294,7 @@ def build_sender_bucket(
     return f"tts-core-{environment.strip().lower()}-{agency.strip().lower()}-data-{purpose.value}"
 
 
-def build_receiver_bucket(
-    agency: str, environment: str, purpose: Literal["landing", "target"]
-) -> str:
+def build_receiver_bucket(agency: str, environment: str, purpose: Literal["landing", "target"]) -> str:
     """
     Build a receiver-side storage bucket name.
 
@@ -333,7 +317,7 @@ def build_receiver_bucket(
     Example:
         >>> build_receiver_bucket("gsa", "dev", "landing")
         "tts-core-dev-gsa-data-landing"
-        
+
         >>> build_receiver_bucket("gsa", "prod", "target")
         "tts-core-prod-gsa-data-target"
     """
@@ -341,7 +325,7 @@ def build_receiver_bucket(
         raise ValueError("agency cannot be blank")
     if not environment.strip():
         raise ValueError("environment cannot be blank")
-    
+
     purpose_lower = purpose.lower() if isinstance(purpose, str) else purpose
     if purpose_lower not in ("landing", "target"):
         raise ValueError('purpose must be either "landing" or "target"')
