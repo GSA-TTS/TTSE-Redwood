@@ -1940,4 +1940,4 @@ def run_agent(config: AgentConfig) -> int:
     elif config.agent_mode == "receiver":
         return _create_receiver_workflow(config)
     else:
-        raise ConfigurationError(f"Invalid agent mode: {config.agent_mode}. " f"Must be 'sender' or 'receiver'.")
+        raise ConfigurationError(f"Invalid agent mode: {config.agent_mode}. Must be 'sender' or 'receiver'.")

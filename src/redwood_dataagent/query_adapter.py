@@ -372,7 +372,7 @@ def _apply_select_fields(table: Any, select_fields: list[Any]) -> Any:
         return table.select(select_fields)
     except KeyError as exc:
         raise ConfigurationError(
-            f"One or more select fields do not exist in the table: {select_fields}. " f"Original error: {exc}"
+            f"One or more select fields do not exist in the table: {select_fields}. Original error: {exc}"
         ) from exc
     except Exception as exc:
         raise ConfigurationError(f"Failed to select fields {select_fields}: {exc}") from exc

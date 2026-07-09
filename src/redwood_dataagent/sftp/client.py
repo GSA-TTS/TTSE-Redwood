@@ -138,7 +138,7 @@ class SFTPClient:
 
             self._paramiko = paramiko
         except ImportError as e:
-            raise ImportError("paramiko is required for SFTP support. " "Install with: pip install paramiko") from e
+            raise ImportError("paramiko is required for SFTP support. Install with: pip install paramiko") from e
 
         if not hosts:
             raise SFTPError("hosts list cannot be empty")
@@ -173,7 +173,7 @@ class SFTPClient:
 
         # Validate authentication method (key or password required)
         if password is None and key_path is None and key_content is None:
-            raise SFTPError("Either password, key_path, or key_content must be provided " "for SFTP authentication")
+            raise SFTPError("Either password, key_path, or key_content must be provided for SFTP authentication")
 
         # If key_path is provided, validate it exists
         if key_path is not None and not key_path.exists():

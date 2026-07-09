@@ -148,7 +148,7 @@ class QueryModeStoragePath(BaseModel):
         if not fingerprint or not fingerprint.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
 
-        return f"{QUERY_MODE_PROCESSED_PREFIX}{template_id.strip()}/" f"{fingerprint.strip()}.done"
+        return f"{QUERY_MODE_PROCESSED_PREFIX}{template_id.strip()}/{fingerprint.strip()}.done"
 
     @staticmethod
     def transfers(transfer_session_id: str, file_name: str) -> str:
@@ -158,7 +158,7 @@ class QueryModeStoragePath(BaseModel):
         if not file_name or not file_name.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
 
-        return f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id.strip()}/" f"{file_name.strip()}"
+        return f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id.strip()}/{file_name.strip()}"
 
     @staticmethod
     def transfer_prefix(transfer_session_id: str) -> str:

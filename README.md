@@ -186,6 +186,51 @@ Run tests:
 pytest
 ```
 
+Run lint and coverage with Make targets:
+
+```bash
+make lint
+make test-cov
+```
+
+## Local SonarQube scan before PR
+
+This repository already contains [sonar-project.properties](sonar-project.properties), so you can run Sonar analysis locally before opening a PR.
+
+Required environment variables:
+
+```bash
+export SONAR_TOKEN="<your-token>"
+```
+
+Note: SONAR_HOST_URL defaults to https://sonarqube-ce.prod.core.mcaas.fcs.gsa.gov/ in the Makefile, but you can override it per shell when needed.
+
+Install scanner locally (one-time; Homebrew-based):
+
+```bash
+make sonar-setup
+```
+
+Run local Sonar scan:
+
+```bash
+make sonar-local
+```
+
+This target runs the full test coverage workflow first (`make test-cov`) so Sonar uses a fresh `coverage/coverage.xml`.
+
+Read open maintainability issues (Sonar code smells) locally:
+
+```bash
+make sonar-maintainability
+```
+
+Single pre-PR command (lint + coverage + Sonar):
+
+```bash
+make pre-pr
+```
+
 ## Documentation
 
 - [Deployment Guide](docs/deploy.md) — Deployment instructions for agencies running sender and receiver instances

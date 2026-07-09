@@ -256,7 +256,7 @@ class ReceiverLandingZone:
             expected_checksum = archive_entry.checksum_sha256
 
             if archive_checksum != expected_checksum:
-                error_msg = f"Archive checksum mismatch: " f"expected {expected_checksum}, got {archive_checksum}"
+                error_msg = f"Archive checksum mismatch: expected {expected_checksum}, got {archive_checksum}"
                 raise ManifestValidationError(error_msg)
 
             # Log successful validation

@@ -12,6 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
+COPY config ./config
 COPY src ./src
 COPY tests ./tests
 
@@ -40,6 +41,7 @@ WORKDIR /app
 
 # Package files
 COPY pyproject.toml README.md ./
+COPY config ./config
 COPY src ./src
 
 # Package install
