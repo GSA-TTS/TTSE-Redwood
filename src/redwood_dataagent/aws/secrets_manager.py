@@ -59,9 +59,7 @@ class SecretsManagerClient:
             self._client: Any = boto3.client("secretsmanager", region_name=aws_region)
             self._region = aws_region
         except ImportError as e:
-            raise ImportError(
-                "boto3 is required for AWS Secrets Manager support. " "Install with: pip install boto3"
-            ) from e
+            raise ImportError("boto3 is required for AWS Secrets Manager support. Install with: pip install boto3") from e
 
         # Log connection for debugging
         LOGGER.debug(

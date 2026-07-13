@@ -24,6 +24,7 @@ dist/
 # Tooling
 .mypy_cache/
 .ruff_cache/
+.scannerwork/
 
 # IDE and OS
 .vscode/
