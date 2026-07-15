@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -22,6 +23,7 @@ from redwood_dataagent.agent import (
     _prepare_query_mode_input,
     _prepare_sender_data_file,
     _resolve_configured_file,
+    _resolve_sender_query_contract_input,
     _run_sender_transfer_pipeline,
     _safe_archive_member_name,
     _select_sender_input_mode,
@@ -33,6 +35,7 @@ from redwood_dataagent.audit.events import EventOutcome
 from redwood_dataagent.config import AgentConfig
 from redwood_dataagent.exceptions import ConfigurationError, StorageError
 from redwood_dataagent.logging_utils import set_agent_mode, set_transfer_session_id
+from redwood_dataagent.models.request import DataproductRequest
 
 
 class TestComputeChecksum:
@@ -229,6 +232,120 @@ class TestSenderQueryInputContractValidation:
                 self._MAX_QUERY_ROW_LIMIT,
                 self._MAX_QUERY_TIMEOUT_SECONDS,
             )
+
+
+class TestSenderDataproductRequestIntegration:
+    """Tests for Story 3 dataproduct request -> sender query contract resolution."""
+
+    def _make_sender_config(self, **kwargs: object) -> AgentConfig:
+        defaults = {
+            "agent_mode": "sender",
+            "tenant": "tts",
+            "environment": "development",
+            "aws_region": "us-east-1",
+            "log_level": "INFO",
+            "transfer_session_id": "session-123",
+            "sender_agency": "dot",
+            "receiver_agency": "gsa",
+            "sender_staging_bucket": "tts-core-development-dot-data-staging",
+            "receiver_landing_bucket": "tts-core-development-gsa-data-landing",
+            "receiver_target_bucket": "tts-core-development-gsa-data-target",
+            "sender_data_directory": "s3://bucket/file_mode/outgoing/",
+            "sftp_endpoints": ["sftp.example.com"],
+            "sftp_username": "sender-user",
+            "max_query_row_limit": 5_000,
+            "max_query_timeout_seconds": 600,
+        }
+        defaults.update(kwargs)
+        return AgentConfig(**defaults)  # type: ignore[arg-type]
+
+    def _make_dataproduct_request(self, **kwargs: object) -> DataproductRequest:
+        payload = {
+            "request_id": "REQ-1",
+            "dataproduct_id": "dot_contract_extract",
+            "requesting_agency": "dot",
+            "requested_by": "sender-agent@dot.gov",
+            "params": {
+                "schema": "dot",
+                "table": "contract_data",
+                "filters": {"contract_value": {"min": 1000}},
+                "select_fields": ["contract_id", "vendor_name"],
+            },
+        }
+        payload.update(kwargs)
+        return DataproductRequest.model_validate(payload)
+
+    def _definition_payload(self) -> dict[str, object]:
+        return {
+            "dataproduct_id": "dot_contract_extract",
+            "version": "1.0.0",
+            "status": "active",
+            "extraction": {
+                "source_type": "sql",
+                "engine": "postgres",
+                "template_id": "dot_contract_extract_v1",
+                "required_params": [
+                    {"name": "schema", "type": "string", "allowed_values": ["dot"]},
+                    {"name": "table", "type": "string", "allowed_values": ["contract_data"]},
+                ],
+                "optional_params": [
+                    {"name": "filters", "type": "object"},
+                    {"name": "select_fields", "type": "array"},
+                ],
+                "default_row_limit": 2500,
+                "max_row_limit": 100000,
+                "default_timeout_seconds": 120,
+                "max_timeout_seconds": 300,
+                "allowed_select_fields": ["contract_id", "vendor_name"],
+                "allowed_filters": [
+                    {"field": "contract_value", "operators": ["min", "max"]},
+                ],
+            },
+        }
+
+    def test_resolve_sender_query_contract_input_uses_legacy_contract_when_request_missing(self) -> None:
+        """Legacy query contract path stays unchanged when dataproduct request is absent."""
+        raw_contract_json = '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"}}'
+        config = self._make_sender_config(sender_query_input_json=raw_contract_json)
+
+        resolved_json, resolved_row_cap, resolved_timeout_cap = _resolve_sender_query_contract_input(config)
+
+        assert resolved_json == raw_contract_json
+        assert resolved_row_cap == config.max_query_row_limit
+        assert resolved_timeout_cap == config.max_query_timeout_seconds
+
+    def test_resolve_sender_query_contract_input_builds_contract_from_dataproduct_request(self) -> None:
+        """Dataproduct request path resolves template and limits from definition + request."""
+        request = self._make_dataproduct_request()
+        config = self._make_sender_config(dataproduct_request=request, sender_query_input_json="")
+
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock(payload=self._definition_payload())
+
+        with patch("redwood_dataagent.agent._load_runtime_dataproduct_registry", return_value=mock_registry):
+            resolved_json, resolved_row_cap, resolved_timeout_cap = _resolve_sender_query_contract_input(config)
+
+        resolved_payload = json.loads(resolved_json)
+        assert resolved_payload["template_id"] == "dot_contract_extract_v1"
+        assert resolved_payload["params"]["schema"] == "dot"
+        assert resolved_payload["row_limit"] == 2500
+        assert resolved_payload["timeout_seconds"] == 120
+        assert resolved_row_cap == 5000
+        assert resolved_timeout_cap == 300
+
+    def test_resolve_sender_query_contract_input_rejects_params_not_allowed_by_definition(self) -> None:
+        """Dataproduct request params must be explicitly allowed in definition constraints."""
+        request = self._make_dataproduct_request(params={"schema": "dot", "table": "contract_data", "rogue": "x"})
+        config = self._make_sender_config(dataproduct_request=request, sender_query_input_json="")
+
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock(payload=self._definition_payload())
+
+        with (
+            patch("redwood_dataagent.agent._load_runtime_dataproduct_registry", return_value=mock_registry),
+            pytest.raises(ConfigurationError, match="not allowed by dataproduct"),
+        ):
+            _resolve_sender_query_contract_input(config)
 
 
 class TestAgentHelperCoverage:

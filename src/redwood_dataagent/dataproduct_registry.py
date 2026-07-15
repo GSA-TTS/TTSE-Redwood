@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from jsonschema import Draft202012Validator
 from packaging.version import Version
 
 from .exceptions import ConfigurationError
+from .json_utils import load_json_object
 from .models.dataproduct import DataproductDefinition, DataproductStatus
 
 DefinitionKey = tuple[str, str]
@@ -79,19 +79,7 @@ def load_dataproduct_registry(definitions_dir: str | Path, schema_path: str | Pa
 
 def _load_json_object(path: Path, label: str) -> dict:
     """Load and validate one JSON object file."""
-
-    try:
-        with path.open("r", encoding="utf-8") as file_handle:
-            payload = json.load(file_handle)
-    except FileNotFoundError as exc:
-        raise ConfigurationError(f"{label} file not found: '{path}'") from exc
-    except json.JSONDecodeError as exc:
-        raise ConfigurationError(f"{label} file is invalid JSON: '{path}': {exc}") from exc
-
-    if not isinstance(payload, dict):
-        raise ConfigurationError(f"{label} must be a JSON object: '{path}'")
-
-    return payload
+    return load_json_object(path, label)
 
 
 def _build_definition(payload: JsonObject, definition_path: Path) -> DataproductDefinition:

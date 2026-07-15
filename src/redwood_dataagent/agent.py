@@ -35,11 +35,13 @@ from .audit.logger import (
 )
 from .aws.s3 import S3Client
 from .config import AgentConfig
+from .dataproduct_registry import DataproductRegistry, load_dataproduct_registry
 from .exceptions import (
     ConfigurationError,
     StorageError,
 )
 from .logging_utils import get_logger, logging_context, prefix_log_message
+from .models.request import DataproductRequest
 from .models.manifest import (
     ChecksumAlgorithm,
     CompressionType,
@@ -151,6 +153,238 @@ def _extract_data(config: AgentConfig) -> None:
 # Sender query-mode helpers
 
 
+def _load_runtime_dataproduct_registry() -> DataproductRegistry:
+    """Load the runtime dataproduct registry from committed file-based definitions.
+
+    The current repo keeps placeholder dataproduct definition instances under
+    ``config/dataproducts/examples/definitions``. They are intentionally treated
+    as runtime seed data for this MVP/WIP phase even though they are not the
+    long-term source of truth. The end-state is to resolve real contracts from a
+    central registry once that integration exists.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    # These example definitions are temporary runtime stand-ins until a central
+    # dataproduct contract registry becomes the authoritative source.
+    definitions_dir = repo_root / "config" / "dataproducts" / "examples" / "definitions"
+    schema_path = repo_root / "config" / "dataproducts" / "schema" / "dataproduct.schema.json"
+    return load_dataproduct_registry(definitions_dir=definitions_dir, schema_path=schema_path)
+
+
+def _validate_request_params_against_definition(
+    request: DataproductRequest,
+    definition_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate request params against definition constraints and return extraction block."""
+    extraction = _extract_sql_extraction_config(request.dataproduct_id, definition_payload)
+    required_params, optional_params = _get_param_definitions(request.dataproduct_id, extraction)
+    required_param_names, optional_param_names = _collect_param_names(required_params, optional_params)
+
+    _validate_allowed_and_required_params(
+        dataproduct_id=request.dataproduct_id,
+        params=request.params,
+        required_param_names=required_param_names,
+        optional_param_names=optional_param_names,
+    )
+    _validate_allowed_param_values(
+        params=request.params,
+        param_definitions=required_params + optional_params,
+    )
+    _validate_allowed_select_fields(
+        params=request.params,
+        allowed_select_fields=extraction.get("allowed_select_fields", []),
+    )
+    _validate_allowed_filters(
+        params=request.params,
+        allowed_filters=extraction.get("allowed_filters", []),
+    )
+
+    return extraction
+
+
+def _extract_sql_extraction_config(dataproduct_id: str, definition_payload: dict[str, Any]) -> dict[str, Any]:
+    """Return extraction config and enforce sender query SQL compatibility."""
+    extraction = definition_payload.get("extraction")
+    if not isinstance(extraction, dict):
+        raise ConfigurationError(f"Dataproduct definition for '{dataproduct_id}' is missing extraction constraints")
+
+    source_type = extraction.get("source_type")
+    if source_type != "sql":
+        raise ConfigurationError(
+            "Sender query mode only supports dataproduct definitions with "
+            f"source_type='sql', got '{source_type}' for '{dataproduct_id}'"
+        )
+
+    return extraction
+
+
+def _get_param_definitions(dataproduct_id: str, extraction: dict[str, Any]) -> tuple[list[Any], list[Any]]:
+    """Return required/optional param definition lists from extraction config."""
+    required_params = extraction.get("required_params", [])
+    optional_params = extraction.get("optional_params", [])
+    if not isinstance(required_params, list) or not isinstance(optional_params, list):
+        raise ConfigurationError(f"Dataproduct definition for '{dataproduct_id}' has invalid param definitions")
+    return required_params, optional_params
+
+
+def _collect_param_names(required_params: list[Any], optional_params: list[Any]) -> tuple[set[str], set[str]]:
+    """Return normalized required and optional param names from param definitions."""
+    required_param_names = {
+        str(param.get("name"))
+        for param in required_params
+        if isinstance(param, dict) and isinstance(param.get("name"), str)
+    }
+    optional_param_names = {
+        str(param.get("name"))
+        for param in optional_params
+        if isinstance(param, dict) and isinstance(param.get("name"), str)
+    }
+    return required_param_names, optional_param_names
+
+
+def _validate_allowed_and_required_params(
+    dataproduct_id: str,
+    params: dict[str, Any],
+    required_param_names: set[str],
+    optional_param_names: set[str],
+) -> None:
+    """Enforce allowed param set and required param presence."""
+    allowed_param_names = required_param_names | optional_param_names
+    unknown_params = sorted(param_name for param_name in params if param_name not in allowed_param_names)
+    if unknown_params:
+        raise ConfigurationError(f"Request contains params not allowed by dataproduct '{dataproduct_id}': {unknown_params}")
+
+    missing_required_params = sorted(
+        param_name
+        for param_name in required_param_names
+        if (
+            param_name not in params
+            or params[param_name] is None
+            or (isinstance(params[param_name], str) and not params[param_name].strip())
+        )
+    )
+    if missing_required_params:
+        raise ConfigurationError(f"Missing required params for dataproduct '{dataproduct_id}': {missing_required_params}")
+
+
+def _validate_allowed_param_values(
+    params: dict[str, Any],
+    param_definitions: list[Any],
+) -> None:
+    """Enforce param-level allowed_values constraints when configured."""
+    for param_definition in param_definitions:
+        if not isinstance(param_definition, dict):
+            continue
+
+        param_name = param_definition.get("name")
+        allowed_values = param_definition.get("allowed_values")
+        if not isinstance(param_name, str) or not isinstance(allowed_values, list) or not allowed_values:
+            continue
+
+        if param_name in params and params[param_name] not in allowed_values:
+            raise ConfigurationError(
+                "Param value not allowed by dataproduct definition: "
+                f"param='{param_name}', value='{params[param_name]}', allowed_values={allowed_values}"
+            )
+
+
+def _validate_allowed_select_fields(params: dict[str, Any], allowed_select_fields: Any) -> None:
+    """Enforce allowed select_fields constraints when configured."""
+    if not isinstance(allowed_select_fields, list) or not allowed_select_fields or "select_fields" not in params:
+        return
+
+    select_fields = params["select_fields"]
+    if not isinstance(select_fields, list):
+        raise ConfigurationError("Param 'select_fields' must be an array when provided")
+
+    disallowed_select_fields = sorted(field for field in select_fields if field not in allowed_select_fields)
+    if disallowed_select_fields:
+        raise ConfigurationError(
+            "Request contains select_fields not allowed by dataproduct definition: " f"{disallowed_select_fields}"
+        )
+
+
+def _build_allowed_filter_map(allowed_filters: list[Any]) -> dict[str, set[str]]:
+    """Build lookup of allowed filter fields to operator sets."""
+    allowed_filter_map: dict[str, set[str]] = {}
+    for filter_definition in allowed_filters:
+        if not isinstance(filter_definition, dict):
+            continue
+
+        field_name = filter_definition.get("field")
+        operators = filter_definition.get("operators", [])
+        if isinstance(field_name, str) and isinstance(operators, list):
+            allowed_filter_map[field_name] = {str(operator) for operator in operators}
+    return allowed_filter_map
+
+
+def _validate_allowed_filters(params: dict[str, Any], allowed_filters: Any) -> None:
+    """Enforce allowed filters and operators constraints when configured."""
+    if not isinstance(allowed_filters, list) or not allowed_filters or "filters" not in params:
+        return
+
+    filters = params["filters"]
+    if not isinstance(filters, dict):
+        raise ConfigurationError("Param 'filters' must be an object when provided")
+
+    allowed_filter_map = _build_allowed_filter_map(allowed_filters)
+    unknown_filter_fields = sorted(field_name for field_name in filters if field_name not in allowed_filter_map)
+    if unknown_filter_fields:
+        raise ConfigurationError(
+            "Request contains filter fields not allowed by dataproduct definition: " f"{unknown_filter_fields}"
+        )
+
+    for field_name, operator_map in filters.items():
+        if not isinstance(operator_map, dict):
+            raise ConfigurationError(f"Filter for field '{field_name}' must be an object")
+
+        disallowed_operators = sorted(
+            operator for operator in operator_map if operator not in allowed_filter_map.get(field_name, set())
+        )
+        if disallowed_operators:
+            raise ConfigurationError(
+                "Request contains filter operators not allowed by dataproduct definition: "
+                f"field='{field_name}', operators={disallowed_operators}"
+            )
+
+
+def _resolve_sender_query_contract_input(config: AgentConfig) -> tuple[str, int, int]:
+    """Resolve query contract input from dataproduct request when provided."""
+    if config.dataproduct_request is None:
+        return config.sender_query_input_json, config.max_query_row_limit, config.max_query_timeout_seconds
+
+    request = config.dataproduct_request
+    try:
+        definition = _load_runtime_dataproduct_registry().get(request.dataproduct_id)
+    except KeyError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+    extraction = _validate_request_params_against_definition(request, definition.payload)
+
+    template_id = extraction.get("template_id")
+    if not isinstance(template_id, str) or not template_id.strip():
+        raise ConfigurationError(
+            f"Dataproduct definition for '{request.dataproduct_id}' is missing extraction.template_id"
+        )
+
+    definition_default_row_limit = int(extraction.get("default_row_limit", config.max_query_row_limit))
+    definition_max_row_limit = int(extraction.get("max_row_limit", config.max_query_row_limit))
+    definition_default_timeout_seconds = int(extraction.get("default_timeout_seconds", config.max_query_timeout_seconds))
+    definition_max_timeout_seconds = int(extraction.get("max_timeout_seconds", config.max_query_timeout_seconds))
+
+    row_limit = request.requested_row_limit or definition_default_row_limit
+    timeout_seconds = request.requested_timeout_seconds or definition_default_timeout_seconds
+
+    payload = {
+        "template_id": template_id,
+        "params": request.params,
+        "row_limit": row_limit,
+        "timeout_seconds": timeout_seconds,
+    }
+    effective_row_limit_cap = min(config.max_query_row_limit, definition_max_row_limit)
+    effective_timeout_cap = min(config.max_query_timeout_seconds, definition_max_timeout_seconds)
+    return json.dumps(payload), effective_row_limit_cap, effective_timeout_cap
+
+
 def _validate_sender_query_input_contract(
     raw_contract_json: str,
     max_query_row_limit: int,
@@ -218,6 +452,20 @@ def _validate_sender_query_input_contract(
     return contract
 
 
+def _resolve_and_validate_sender_query_contract(config: AgentConfig) -> SenderQueryInputContract:
+    """Resolve sender query contract input and validate it into a typed contract."""
+    (
+        raw_contract_json,
+        effective_row_limit_cap,
+        effective_timeout_cap,
+    ) = _resolve_sender_query_contract_input(config)
+    return _validate_sender_query_input_contract(
+        raw_contract_json,
+        max_query_row_limit=effective_row_limit_cap,
+        max_query_timeout_seconds=effective_timeout_cap,
+    )
+
+
 def _create_sender_query_workflow(config: AgentConfig) -> None:
     """Execute validated query contract and produce staged CSV output.
 
@@ -248,11 +496,7 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
     )
 
     try:
-        contract = _validate_sender_query_input_contract(
-            config.sender_query_input_json,
-            max_query_row_limit=config.max_query_row_limit,
-            max_query_timeout_seconds=config.max_query_timeout_seconds,
-        )
+        contract = _resolve_and_validate_sender_query_contract(config)
     except ConfigurationError as exc:
         LOGGER.error(
             prefix_log_message(
@@ -955,11 +1199,7 @@ def _prepare_query_mode_input(config: AgentConfig, tmpdir_path: Path) -> SenderI
     failure, or idempotent skip) after logging the appropriate audit events.
     """
     try:
-        contract = _validate_sender_query_input_contract(
-            config.sender_query_input_json,
-            max_query_row_limit=config.max_query_row_limit,
-            max_query_timeout_seconds=config.max_query_timeout_seconds,
-        )
+        contract = _resolve_and_validate_sender_query_contract(config)
     except ConfigurationError as exc:
         log_extract_data(
             transfer_session_id=config.transfer_session_id,
