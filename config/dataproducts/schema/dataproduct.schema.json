@@ -341,7 +341,7 @@
         },
         "type": {
           "type": "string",
-          "enum": ["string", "integer", "number", "boolean", "date", "datetime", "array"]
+          "enum": ["string", "integer", "number", "boolean", "date", "datetime", "array", "object"]
         },
         "description": {
           "type": "string",

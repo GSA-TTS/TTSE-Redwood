@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from redwood_dataagent.exceptions import ConfigurationError
+from redwood_dataagent.json_utils import load_json_object
 
 JsonObject = dict[str, Any]
 MetadataValue = str | int | float | bool
@@ -107,18 +108,7 @@ def _load_request_payload(raw_request_json: str) -> JsonObject:
 
 def _load_json_object(path: Path, label: str) -> JsonObject:
     """Load a JSON file and enforce an object root payload."""
-    try:
-        with path.open("r", encoding="utf-8") as file_handle:
-            payload = json.load(file_handle)
-    except FileNotFoundError as exc:
-        raise ConfigurationError(f"{label} file not found: '{path}'") from exc
-    except json.JSONDecodeError as exc:
-        raise ConfigurationError(f"{label} file is invalid JSON: '{path}': {exc}") from exc
-
-    if not isinstance(payload, dict):
-        raise ConfigurationError(f"{label} must be a JSON object: '{path}'")
-
-    return payload
+    return load_json_object(path, label)
 
 
 def _validate_payload_against_schema(payload: JsonObject, validator: Draft202012Validator) -> None:
