@@ -40,6 +40,7 @@ from .exceptions import (
     ConfigurationError,
     StorageError,
 )
+from .json_utils import resolve_runtime_config_path
 from .logging_utils import get_logger, logging_context, prefix_log_message
 from .models.request import DataproductRequest
 from .models.manifest import (
@@ -162,11 +163,10 @@ def _load_runtime_dataproduct_registry() -> DataproductRegistry:
     long-term source of truth. The end-state is to resolve real contracts from a
     central registry once that integration exists.
     """
-    repo_root = Path(__file__).resolve().parents[2]
     # These example definitions are temporary runtime stand-ins until a central
     # dataproduct contract registry becomes the authoritative source.
-    definitions_dir = repo_root / "config" / "dataproducts" / "examples" / "definitions"
-    schema_path = repo_root / "config" / "dataproducts" / "schema" / "dataproduct.schema.json"
+    definitions_dir = resolve_runtime_config_path("dataproducts", "examples", "definitions")
+    schema_path = resolve_runtime_config_path("dataproducts", "schema", "dataproduct.schema.json")
     return load_dataproduct_registry(definitions_dir=definitions_dir, schema_path=schema_path)
 
 

@@ -10,20 +10,15 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from redwood_dataagent.exceptions import ConfigurationError
-from redwood_dataagent.json_utils import load_json_object
+from redwood_dataagent.json_utils import load_json_object, resolve_runtime_config_path
 
 JsonObject = dict[str, Any]
 MetadataValue = str | int | float | bool
 
 
-def _repo_root() -> Path:
-    """Return the repository root path based on this module location."""
-    return Path(__file__).resolve().parents[3]
-
-
 def _default_schema_path() -> Path:
     """Return the default dataproduct request schema file path."""
-    return _repo_root() / "config" / "dataproducts" / "schema" / "dataproduct-request.schema.json"
+    return resolve_runtime_config_path("dataproducts", "schema", "dataproduct-request.schema.json")
 
 
 class DataproductRequest(BaseModel):
