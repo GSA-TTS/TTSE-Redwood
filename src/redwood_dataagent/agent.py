@@ -42,7 +42,6 @@ from .exceptions import (
 )
 from .json_utils import resolve_runtime_config_path
 from .logging_utils import get_logger, logging_context, prefix_log_message
-from .models.request import DataproductRequest
 from .models.manifest import (
     ChecksumAlgorithm,
     CompressionType,
@@ -50,6 +49,7 @@ from .models.manifest import (
     TransferManifest,
     apply_archive_field_naming,
 )
+from .models.request import DataproductRequest
 from .policy import PolicyApprover
 from .query_adapter import execute_query
 from .query_templates import ALLOWLISTED_QUERY_TEMPLATES
@@ -100,6 +100,15 @@ class SenderTransferArtifacts:
 
     manifest: TransferManifest
     staged_artifact_keys: list[str]
+
+
+@dataclass
+class FileModeSource:
+    """Resolved file-mode source and marker directory."""
+
+    s3_path: str
+    file_name: str
+    marker_directory: str
 
 
 def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
@@ -1134,8 +1143,100 @@ def _build_sender_transfer_key(selected_mode: str, transfer_session_id: str, fil
     return FileModeStoragePath.transfers(transfer_session_id, file_name)
 
 
-def _select_file_mode_source(config: AgentConfig) -> tuple[str, str] | None:
-    """Return (s3_path, file_name) for file mode, or None when no work exists."""
+def _extract_file_extraction_config(dataproduct_id: str, definition_payload: dict[str, Any]) -> dict[str, Any]:
+    """Return extraction config and enforce sender file-mode compatibility."""
+    extraction = definition_payload.get("extraction")
+    if not isinstance(extraction, dict):
+        raise ConfigurationError(f"Dataproduct definition for '{dataproduct_id}' is missing extraction constraints")
+
+    source_type = extraction.get("source_type")
+    if source_type != "file":
+        raise ConfigurationError(
+            "Sender file mode only supports dataproduct definitions with "
+            f"source_type='file', got '{source_type}' for '{dataproduct_id}'"
+        )
+
+    engine = extraction.get("engine")
+    if engine != "s3-file":
+        raise ConfigurationError(
+            "Sender file mode only supports dataproduct definitions with "
+            f"engine='s3-file', got '{engine}' for '{dataproduct_id}'"
+        )
+
+    return extraction
+
+
+def _resolve_file_mode_source_from_request(config: AgentConfig) -> FileModeSource | None:
+    """Resolve file-mode source from dataproduct request when provided."""
+    request = config.dataproduct_request
+    if request is None:
+        return None
+
+    try:
+        definition = _load_runtime_dataproduct_registry().get(request.dataproduct_id)
+    except KeyError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+    extraction = _extract_file_extraction_config(request.dataproduct_id, definition.payload)
+    required_params, optional_params = _get_param_definitions(request.dataproduct_id, extraction)
+    required_param_names, optional_param_names = _collect_param_names(required_params, optional_params)
+    _validate_allowed_and_required_params(
+        dataproduct_id=request.dataproduct_id,
+        params=request.params,
+        required_param_names=required_param_names,
+        optional_param_names=optional_param_names,
+    )
+    _validate_allowed_param_values(
+        params=request.params,
+        param_definitions=required_params + optional_params,
+    )
+
+    s3_path_value = request.params.get("s3_path")
+    if not isinstance(s3_path_value, str) or not s3_path_value.strip():
+        raise ConfigurationError("File-mode dataproduct request requires params.s3_path as a non-empty string")
+
+    s3_path = s3_path_value.strip()
+    parsed = _parse_s3_path(s3_path)
+    if parsed is None:
+        raise ConfigurationError(f"File-mode param 's3_path' must be an S3 URL, got: {s3_path}")
+
+    bucket, key = parsed
+    file_name_value = request.params.get("file_name")
+    if isinstance(file_name_value, str) and file_name_value.strip():
+        file_name = file_name_value.strip()
+    else:
+        file_name = Path(key).name
+    if not file_name:
+        raise ConfigurationError(f"File-mode param 's3_path' must include an object key, got: {s3_path}")
+
+    parent_key = key.rsplit("/", 1)[0] if "/" in key else ""
+    marker_directory = f"s3://{bucket}/{parent_key}/" if parent_key else f"s3://{bucket}/"
+    return FileModeSource(
+        s3_path=s3_path,
+        file_name=file_name,
+        marker_directory=marker_directory,
+    )
+
+
+def _select_file_mode_source(config: AgentConfig) -> FileModeSource | None:
+    """Return resolved file-mode source, or None when no work exists."""
+    request_source = _resolve_file_mode_source_from_request(config)
+    if request_source is not None:
+        LOGGER.info(
+            prefix_log_message(
+                "Resolved file-mode source from dataproduct request",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_file_source_resolved",
+                "resolution": "dataproduct_request",
+                "s3_path": request_source.s3_path,
+                "file_name": request_source.file_name,
+            },
+        )
+        return request_source
+
     if not config.sender_data_directory:
         LOGGER.warning(
             prefix_log_message(
@@ -1189,7 +1290,11 @@ def _select_file_mode_source(config: AgentConfig) -> tuple[str, str] | None:
         ),
         extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
     )
-    return s3_path, file_name
+    return FileModeSource(
+        s3_path=s3_path,
+        file_name=file_name,
+        marker_directory=config.sender_data_directory,
+    )
 
 
 def _prepare_query_mode_input(config: AgentConfig, tmpdir_path: Path) -> SenderInputPreparation | None:
@@ -1689,7 +1794,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             },
         )
 
-        file_mode_source: tuple[str, str] | None = None
+        file_mode_source: FileModeSource | None = None
         if selected_mode != "query":
             file_mode_source = _select_file_mode_source(config)
             if file_mode_source is None:
@@ -1711,12 +1816,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             else:
                 if file_mode_source is None:
                     raise StorageError("File mode source selection was not initialized")
-                s3_path, file_name = file_mode_source
                 prepared_input = _prepare_file_mode_input(
                     config,
                     tmpdir_path,
-                    s3_path,
-                    file_name,
+                    file_mode_source.s3_path,
+                    file_mode_source.file_name,
                 )
 
             if prepared_input is None:
@@ -1760,9 +1864,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
             # 6. Mark file as processed for file mode inputs.
             if selected_mode != "query":
+                if file_mode_source is None:
+                    raise StorageError("File mode source selection was not initialized")
                 _retry_operation(
                     "mark_file_processed",
-                    lambda: _mark_file_processed(file_name, config.sender_data_directory, config.aws_region),
+                    lambda: _mark_file_processed(file_name, file_mode_source.marker_directory, config.aws_region),
                 )
                 LOGGER.info(
                     prefix_log_message(
@@ -1774,7 +1880,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                         "event": "sender_file_marked",
                         "file_name": file_name,
                         "marker_location": (
-                            f"{config.sender_data_directory}../"
+                            f"{file_mode_source.marker_directory}../"
                             f"{FileModeStoragePath.processed_prefix()}{file_name}{DONE_MARKER_SUFFIX}"
                         ),
                     },

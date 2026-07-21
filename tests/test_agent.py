@@ -26,6 +26,7 @@ from redwood_dataagent.agent import (
     _resolve_sender_query_contract_input,
     _run_sender_transfer_pipeline,
     _safe_archive_member_name,
+    _select_file_mode_source,
     _select_sender_input_mode,
     _validate_sender_query_input_contract,
     _write_sender_manifest_output,
@@ -303,6 +304,28 @@ class TestSenderDataproductRequestIntegration:
             },
         }
 
+    def _file_definition_payload(self) -> dict[str, object]:
+        return {
+            "dataproduct_id": "dot_file_drop",
+            "version": "1.0.0",
+            "status": "active",
+            "extraction": {
+                "source_type": "file",
+                "engine": "s3-file",
+                "template_id": "dot_file_drop_v1",
+                "required_params": [
+                    {"name": "s3_path", "type": "string"},
+                ],
+                "optional_params": [
+                    {"name": "file_name", "type": "string"},
+                ],
+                "default_row_limit": 1,
+                "max_row_limit": 1,
+                "default_timeout_seconds": 60,
+                "max_timeout_seconds": 300,
+            },
+        }
+
     def test_resolve_sender_query_contract_input_uses_legacy_contract_when_request_missing(self) -> None:
         """Legacy query contract path stays unchanged when dataproduct request is absent."""
         raw_contract_json = '{"template_id":"dot_contract_extract_v1","params":{"schema":"dot","table":"contract_data"}}'
@@ -346,6 +369,58 @@ class TestSenderDataproductRequestIntegration:
             pytest.raises(ConfigurationError, match="not allowed by dataproduct"),
         ):
             _resolve_sender_query_contract_input(config)
+
+    def test_select_file_mode_source_resolves_from_dataproduct_request(self) -> None:
+        """File mode can resolve a direct s3 object source via dataproduct request lookup."""
+        request = DataproductRequest.model_validate(
+            {
+                "request_id": "REQ-file-1",
+                "dataproduct_id": "dot_file_drop",
+                "requesting_agency": "dot",
+                "requested_by": "sender-agent@dot.gov",
+                "params": {
+                    "s3_path": "s3://bucket/file_mode/outgoing/inbound/data.json",
+                },
+            }
+        )
+        config = self._make_sender_config(dataproduct_request=request, sender_input_mode="file")
+
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock(payload=self._file_definition_payload())
+
+        with patch("redwood_dataagent.agent._load_runtime_dataproduct_registry", return_value=mock_registry):
+            source = _select_file_mode_source(config)
+
+        assert source is not None
+        assert source.s3_path == "s3://bucket/file_mode/outgoing/inbound/data.json"
+        assert source.file_name == "data.json"
+        assert source.marker_directory == "s3://bucket/file_mode/outgoing/inbound/"
+
+    def test_select_file_mode_source_rejects_sql_dataproduct_definition(self) -> None:
+        """File mode rejects dataproduct definitions that are not source_type=file."""
+        request = DataproductRequest.model_validate(
+            {
+                "request_id": "REQ-file-2",
+                "dataproduct_id": "dot_contract_extract",
+                "requesting_agency": "dot",
+                "requested_by": "sender-agent@dot.gov",
+                "params": {
+                    "s3_path": "s3://bucket/file_mode/outgoing/inbound/data.json",
+                    "schema": "dot",
+                    "table": "contract_data",
+                },
+            }
+        )
+        config = self._make_sender_config(dataproduct_request=request, sender_input_mode="file")
+
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock(payload=self._definition_payload())
+
+        with (
+            patch("redwood_dataagent.agent._load_runtime_dataproduct_registry", return_value=mock_registry),
+            pytest.raises(ConfigurationError, match="source_type='file'"),
+        ):
+            _select_file_mode_source(config)
 
 
 class TestAgentHelperCoverage:
@@ -700,6 +775,76 @@ class TestSenderWorkflow:
 
                     exit_code = _create_sender_workflow(config)
                     assert exit_code == 0
+
+    def test_sender_workflow_file_mode_dataproduct_request_marks_processed_from_request_path(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """File mode request path uses request-derived directory for processed markers."""
+        request = DataproductRequest.model_validate(
+            {
+                "request_id": "REQ-file-3",
+                "dataproduct_id": "dot_file_drop",
+                "requesting_agency": "dot",
+                "requested_by": "sender-agent@dot.gov",
+                "params": {
+                    "s3_path": "s3://bucket/file_mode/outgoing/custom/records.json",
+                },
+            }
+        )
+        config = self._make_config(
+            sender_input_mode="file",
+            sender_data_directory="s3://bucket/outgoing/",
+            dataproduct_request=request,
+        )
+
+        definition_payload = {
+            "dataproduct_id": "dot_file_drop",
+            "version": "1.0.0",
+            "status": "active",
+            "extraction": {
+                "source_type": "file",
+                "engine": "s3-file",
+                "template_id": "dot_file_drop_v1",
+                "required_params": [{"name": "s3_path", "type": "string"}],
+                "optional_params": [{"name": "file_name", "type": "string"}],
+                "default_row_limit": 1,
+                "max_row_limit": 1,
+                "default_timeout_seconds": 60,
+                "max_timeout_seconds": 300,
+            },
+        }
+
+        test_file = tmp_path / "records.json"
+        test_file.write_text('[{"id": 1}]')
+
+        with patch("redwood_dataagent.agent._scan_sender_directory") as mock_scan:
+            with patch("redwood_dataagent.agent._mark_file_processed") as mock_mark_processed:
+                with patch("redwood_dataagent.agent._load_runtime_dataproduct_registry") as mock_registry_loader:
+                    with patch("redwood_dataagent.agent.S3Client") as mock_s3_class:
+                        mock_registry = MagicMock()
+                        mock_registry.get.return_value = MagicMock(payload=definition_payload)
+                        mock_registry_loader.return_value = mock_registry
+
+                        mock_client = MagicMock()
+                        mock_s3_class.return_value = mock_client
+
+                        def mock_download(bucket, key, dest):
+                            import shutil
+
+                            shutil.copy2(test_file, dest)
+
+                        mock_client.download_file.side_effect = mock_download
+
+                        exit_code = _create_sender_workflow(config)
+
+        assert exit_code == 0
+        mock_scan.assert_not_called()
+        mock_mark_processed.assert_called_once_with(
+            "records.json",
+            "s3://bucket/file_mode/outgoing/custom/",
+            "us-east-1",
+        )
 
     def test_sender_workflow_query_mode_missing_contract_logs_audit_failure(self) -> None:
         """Query mode fails fast and emits extract/pipeline failure audit logs when contract is missing."""
