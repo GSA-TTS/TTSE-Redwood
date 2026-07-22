@@ -1,0 +1,86 @@
+{
+  "dataproduct_id": "dot_file_drop",
+  "name": "DOT File Drop",
+  "version": "1.0.0",
+  "status": "active",
+  "owner_agency": "dot",
+  "data_owner": {
+    "name": "DOT Data Owner",
+    "team": "DOT Data Exchange",
+    "contact_email": "dot.data.owner@example.gov"
+  },
+  "access": {
+    "allowed_requesting_agencies": [
+      "dot",
+      "tts"
+    ],
+    "allowed_requesting_roles": [
+      "data_exchange_operator"
+    ],
+    "approval_policy": "auto",
+    "classification_tags": [
+      "CUI"
+    ],
+    "retention_policy_days": 2555
+  },
+  "extraction": {
+    "source_type": "file",
+    "engine": "s3-file",
+    "template_id": "dot_file_drop_v1",
+    "required_params": [
+      {
+        "name": "s3_path",
+        "type": "string",
+        "description": "Full S3 URI for the source object"
+      }
+    ],
+    "optional_params": [
+      {
+        "name": "file_name",
+        "type": "string",
+        "description": "Optional destination artifact name override"
+      }
+    ],
+    "default_row_limit": 1,
+    "max_row_limit": 1,
+    "default_timeout_seconds": 60,
+    "max_timeout_seconds": 300
+  },
+  "delivery": {
+    "output_format": "jsonl",
+    "naming_convention": "dot_file_drop_{transfer_session_id}.json",
+    "delivery_targets": [
+      {
+        "target_id": "default_sftp_receiver",
+        "type": "sftp",
+        "description": "Default receiver SFTP endpoint"
+      }
+    ],
+    "manifest_requirements": [
+      "transfer_session_id",
+      "dataproduct_id",
+      "request_id",
+      "checksum",
+      "record_count"
+    ]
+  },
+  "operations": {
+    "schedule_constraints": {
+      "enabled": true,
+      "allowed_utc_windows": []
+    },
+    "idempotency_scope": "request_id",
+    "audit_level": "standard",
+    "notifications": {
+      "on_request": [
+        "dot-approvals@example.gov"
+      ],
+      "on_success": [
+        "dot-data-ops@example.gov"
+      ],
+      "on_failure": [
+        "dot-support@example.gov"
+      ]
+    }
+  }
+}
