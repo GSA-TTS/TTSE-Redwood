@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
+from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field, ValidationError
 
 from .audit.events import EventOutcome
@@ -149,6 +150,39 @@ def _build_file_mode_processed_marker_key(key: str) -> str:
         return key.replace(f"/{sender_scan_prefix}", f"/{processed_prefix}", 1) + DONE_MARKER_SUFFIX
 
     return f"{processed_prefix}{Path(key).name}{DONE_MARKER_SUFFIX}"
+
+
+def _resolve_file_mode_processed_marker(directory_path: str, file_name: str) -> tuple[str, str]:
+    """Resolve bucket and processed marker key for a file-mode source object."""
+    parsed = _parse_s3_path(directory_path)
+    if parsed is None:
+        raise StorageError(f"Sender directory must be an S3 path, got: {directory_path}")
+
+    bucket, prefix = parsed
+    if not prefix.endswith("/"):
+        prefix = f"{prefix}/"
+
+    processed_prefix = prefix.replace(
+        FileModeStoragePath.scan_prefix(),
+        FileModeStoragePath.processed_prefix(),
+        1,
+    )
+    marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
+    return bucket, marker_key
+
+
+def _marker_exists(client: S3Client, bucket: str, marker_key: str) -> bool:
+    """Return True when an idempotency marker key exists in S3."""
+    try:
+        client._client.head_object(Bucket=bucket, Key=marker_key)
+        return True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise StorageError(f"Failed to check processed marker {marker_key}: {exc}") from exc
+    except Exception as exc:
+        raise StorageError(f"Failed to check processed marker {marker_key}: {exc}") from exc
 
 
 def _extract_data(config: AgentConfig) -> None:
@@ -823,13 +857,9 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
 
             # Check if file has been processed (marker exists in processed/)
             processed_marker_key = _build_file_mode_processed_marker_key(key)
-            try:
-                client._client.head_object(Bucket=bucket, Key=processed_marker_key)
+            if _marker_exists(client, bucket, processed_marker_key):
                 LOGGER.debug(f"Skipping already processed file: {key}")
                 continue
-            except Exception:
-                # Marker doesn't exist, file is ready to process
-                pass
 
             s3_path = f"s3://{bucket}/{key}"
             files.append((s3_path, file_name))
@@ -857,23 +887,8 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
         If marker creation fails
     """
     try:
-        parsed = _parse_s3_path(directory_path)
-        if parsed is None:
-            raise StorageError(f"Sender directory must be an S3 path, got: {directory_path}")
-
-        bucket, prefix = parsed
+        bucket, marker_key = _resolve_file_mode_processed_marker(directory_path, file_name)
         client = S3Client(aws_region=aws_region)
-
-        # Create marker in file-mode processed directory using absolute path.
-        if not prefix.endswith("/"):
-            prefix = f"{prefix}/"
-
-        processed_prefix = prefix.replace(
-            FileModeStoragePath.scan_prefix(),
-            FileModeStoragePath.processed_prefix(),
-            1,
-        )
-        marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
         timestamp = datetime.now(UTC).isoformat()
         marker_metadata = {
             "processed_at": timestamp,
@@ -1222,6 +1237,33 @@ def _select_file_mode_source(config: AgentConfig) -> FileModeSource | None:
     """Return resolved file-mode source, or None when no work exists."""
     request_source = _resolve_file_mode_source_from_request(config)
     if request_source is not None:
+        marker_bucket, marker_key = _resolve_file_mode_processed_marker(
+            request_source.marker_directory,
+            request_source.file_name,
+        )
+        if _retry_operation(
+            "check_file_processed",
+            lambda: _marker_exists(
+                S3Client(aws_region=config.aws_region),
+                marker_bucket,
+                marker_key,
+            ),
+        ):
+            LOGGER.info(
+                prefix_log_message(
+                    "No new file read. Exiting sender workflow (idempotent).",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
+                extra={
+                    "event": "sender_no_files",
+                    "resolution": "dataproduct_request",
+                    "file_name": request_source.file_name,
+                    "s3_path": request_source.s3_path,
+                },
+            )
+            return None
+
         LOGGER.info(
             prefix_log_message(
                 "Resolved file-mode source from dataproduct request",
