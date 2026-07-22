@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 from redwood_dataagent.agent import (
     ALLOWLISTED_QUERY_TEMPLATES,
@@ -387,14 +388,59 @@ class TestSenderDataproductRequestIntegration:
 
         mock_registry = MagicMock()
         mock_registry.get.return_value = MagicMock(payload=self._file_definition_payload())
+        not_found_error = ClientError(
+            {
+                "Error": {
+                    "Code": "404",
+                    "Message": "Not Found",
+                }
+            },
+            "HeadObject",
+        )
 
-        with patch("redwood_dataagent.agent._load_runtime_dataproduct_registry", return_value=mock_registry):
+        with (
+            patch("redwood_dataagent.agent._load_runtime_dataproduct_registry", return_value=mock_registry),
+            patch("redwood_dataagent.agent.S3Client") as mock_s3_class,
+        ):
+            mock_s3 = MagicMock()
+            mock_s3._client.head_object.side_effect = not_found_error
+            mock_s3_class.return_value = mock_s3
             source = _select_file_mode_source(config)
 
         assert source is not None
         assert source.s3_path == "s3://bucket/file_mode/outgoing/inbound/data.json"
         assert source.file_name == "data.json"
         assert source.marker_directory == "s3://bucket/file_mode/outgoing/inbound/"
+
+    def test_select_file_mode_source_skips_request_when_marker_exists(self) -> None:
+        """File mode request source is skipped when processed marker already exists."""
+        request = DataproductRequest.model_validate(
+            {
+                "request_id": "REQ-file-processed",
+                "dataproduct_id": "dot_file_drop",
+                "requesting_agency": "dot",
+                "requested_by": "sender-agent@dot.gov",
+                "params": {
+                    "s3_path": "s3://bucket/file_mode/outgoing/inbound/data.json",
+                },
+            }
+        )
+        config = self._make_sender_config(dataproduct_request=request, sender_input_mode="file")
+
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock(payload=self._file_definition_payload())
+
+        with (
+            patch("redwood_dataagent.agent._load_runtime_dataproduct_registry", return_value=mock_registry),
+            patch("redwood_dataagent.agent.S3Client") as mock_s3_class,
+        ):
+            mock_s3 = MagicMock()
+            mock_s3._client.head_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
+            mock_s3_class.return_value = mock_s3
+
+            source = _select_file_mode_source(config)
+
+        assert source is None
 
     def test_select_file_mode_source_rejects_sql_dataproduct_definition(self) -> None:
         """File mode rejects dataproduct definitions that are not source_type=file."""
@@ -828,6 +874,15 @@ class TestSenderWorkflow:
 
                         mock_client = MagicMock()
                         mock_s3_class.return_value = mock_client
+                        mock_client._client.head_object.side_effect = ClientError(
+                            {
+                                "Error": {
+                                    "Code": "404",
+                                    "Message": "Not Found",
+                                }
+                            },
+                            "HeadObject",
+                        )
 
                         def mock_download(bucket, key, dest):
                             import shutil
