@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class DataproductStatus(str, Enum):
+class DataproductStatus(StrEnum):
     """Lifecycle status of a dataproduct definition."""
 
     DRAFT = "draft"

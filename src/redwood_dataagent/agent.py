@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field, ValidationError
@@ -73,9 +73,6 @@ DONE_MARKER_SUFFIX = ".done"
 VALID_SENDER_INPUT_MODES = {"file", "query"}
 QUERY_SKIP_REASON_MATCHING_MARKER = "matching query success marker already exists"
 
-T = TypeVar("T")
-
-
 class SenderQueryInputContract(BaseModel):
     """Runtime query input contract for sender query mode."""
 
@@ -112,7 +109,7 @@ class FileModeSource:
     marker_directory: str
 
 
-def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
+def _retry_operation[T](operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
     """Retry an operation for transient failures before raising StorageError."""
     last_error: Exception | None = None
 
@@ -1568,6 +1565,31 @@ def _prepare_file_mode_input(
         raise StorageError(f"Failed to download {s3_path}: {e}") from e
 
 
+def _build_policy_check_details(config: AgentConfig, file_count: int, is_approved: bool) -> dict[str, Any]:
+    """Build audit detail payload for sender policy check outcomes."""
+    details: dict[str, Any] = {
+        "decision": "allow" if is_approved else "deny",
+        "reason": "policy_approved" if is_approved else "policy_approval_denied",
+        "file_count": file_count,
+    }
+
+    request = config.dataproduct_request
+    if request is None:
+        return details
+
+    details["request_id"] = request.request_id
+    details["dataproduct_id"] = request.dataproduct_id
+    classification_tags = {
+        key: value
+        for key, value in request.metadata.items()
+        if "classification" in key.lower()
+    }
+    if classification_tags:
+        details["classification_tags"] = classification_tags
+
+    return details
+
+
 def _run_sender_transfer_pipeline(
     config: AgentConfig,
     selected_mode: str,
@@ -1583,21 +1605,48 @@ def _run_sender_transfer_pipeline(
     )
 
     if not is_approved:
+        policy_details = _build_policy_check_details(config=config, file_count=1, is_approved=False)
         log_policy_check(
             transfer_session_id=config.transfer_session_id,
             sender_agency=config.sender_agency,
             receiver_agency=config.receiver_agency,
             outcome=EventOutcome.FAILURE,
-            details={"reason": "Policy approval denied", "file_count": 1},
+            details=policy_details,
         )
         return None
 
+    policy_details = _build_policy_check_details(config=config, file_count=1, is_approved=True)
     log_policy_check(
         transfer_session_id=config.transfer_session_id,
         sender_agency=config.sender_agency,
         receiver_agency=config.receiver_agency,
         outcome=EventOutcome.SUCCESS,
-        details={"file_count": 1},
+        details=policy_details,
+    )
+
+    request_executing_event: dict[str, Any] = {
+        "event": "request_executing",
+        "selected_mode": selected_mode,
+        "file_name": file_name,
+        "policy_decision": "allow",
+    }
+    request_id = policy_details.get("request_id")
+    dataproduct_id = policy_details.get("dataproduct_id")
+    classification_tags = policy_details.get("classification_tags")
+    if isinstance(request_id, str):
+        request_executing_event["request_id"] = request_id
+    if isinstance(dataproduct_id, str):
+        request_executing_event["dataproduct_id"] = dataproduct_id
+    if isinstance(classification_tags, dict):
+        request_executing_event["classification_tags"] = classification_tags
+
+    LOGGER.info(
+        prefix_log_message(
+            "Request executing",
+            agent_mode=config.agent_mode,
+            transfer_session_id=config.transfer_session_id,
+        ),
+        extra=request_executing_event,
     )
 
     archive_path = tmpdir_path / DEFAULT_ARCHIVE_FILE_NAME

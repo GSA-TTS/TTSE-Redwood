@@ -159,7 +159,7 @@ def get_transfer_session_id() -> str | None:
 
 
 @contextmanager
-def logging_context(session_id: str) -> Generator[None, None, None]:
+def logging_context(session_id: str) -> Generator[None]:
     """
     Context manager to temporarily override transfer_session_id.
 
