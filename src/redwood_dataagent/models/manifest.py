@@ -7,18 +7,18 @@ integrity validation before decompression and target storage.
 """
 
 from datetime import UTC, date, datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class ChecksumAlgorithm(str, Enum):
+class ChecksumAlgorithm(StrEnum):
     """Supported checksum algorithms for Day 1 validation."""
 
     SHA256 = "sha256"
 
 
-class CompressionType(str, Enum):
+class CompressionType(StrEnum):
     """Supported payload compression formats for Day 1 transfers."""
 
     GZIP = "gzip"

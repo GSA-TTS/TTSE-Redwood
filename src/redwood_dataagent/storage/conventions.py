@@ -24,7 +24,7 @@ Path patterns:
 - Receiver extracted: extracted/{transfer_session_id}/{file_name}
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -42,7 +42,7 @@ QUERY_MODE_PROCESSED_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/processed/"
 QUERY_MODE_TRANSFERS_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/transfers"
 
 
-class StoragePurpose(str, Enum):
+class StoragePurpose(StrEnum):
     """Storage purposes in the Day 1 transfer pipeline."""
 
     STAGING = "staging"

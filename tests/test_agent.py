@@ -712,26 +712,61 @@ class TestAgentHelperCoverage:
 
     def test_run_sender_transfer_pipeline_failure_branches(self, tmp_path: Path) -> None:
         """Sender transfer pipeline covers policy-denied, compress failure, and manifest failure branches."""
-        config = self._make_sender_config()
+        dataproduct_request = DataproductRequest.model_validate(
+            {
+                "request_id": "REQ-1",
+                "dataproduct_id": "dot_contract_extract",
+                "requesting_agency": "dot",
+                "requested_by": "sender-agent@dot.gov",
+                "params": {"schema": "dot", "table": "contract_data"},
+                "metadata": {"classification_level": "cui"},
+            }
+        )
+        config = self._make_sender_config(
+            dataproduct_request=dataproduct_request
+        )
         staged_file = tmp_path / "data.json"
         staged_file.write_text('{"id":1}')
 
-        with patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls:
+        with (
+            patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls,
+            patch("redwood_dataagent.agent.log_policy_check") as mock_policy_check,
+            patch("redwood_dataagent.agent.LOGGER") as mock_logger,
+        ):
             mock_approver = MagicMock()
             mock_approver.approve_transfer.return_value = False
             mock_approver_cls.return_value = mock_approver
             assert _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path) is None
+            denied_policy_details = mock_policy_check.call_args.kwargs["details"]
+            assert mock_policy_check.call_args.kwargs["outcome"] == EventOutcome.FAILURE
+            assert denied_policy_details["decision"] == "deny"
+            assert denied_policy_details["reason"] == "policy_approval_denied"
+            assert denied_policy_details["request_id"] == "REQ-1"
+            assert denied_policy_details["dataproduct_id"] == "dot_contract_extract"
+            assert denied_policy_details["classification_tags"] == {"classification_level": "cui"}
+            mock_logger.info.assert_not_called()
 
         with (
             patch("redwood_dataagent.agent.PolicyApprover") as mock_approver_cls,
             patch("redwood_dataagent.agent._compress_sender_data", side_effect=RuntimeError("compress failed")),
             patch("redwood_dataagent.agent.log_compress") as mock_log_compress,
+            patch("redwood_dataagent.agent.log_policy_check") as mock_policy_check,
+            patch("redwood_dataagent.agent.LOGGER") as mock_logger,
         ):
             mock_approver = MagicMock()
             mock_approver.approve_transfer.return_value = True
             mock_approver_cls.return_value = mock_approver
             with pytest.raises(Exception):  # noqa: B017
                 _run_sender_transfer_pipeline(config, "file", staged_file, "data.json", tmp_path)
+            approved_policy_details = mock_policy_check.call_args.kwargs["details"]
+            assert mock_policy_check.call_args.kwargs["outcome"] == EventOutcome.SUCCESS
+            assert approved_policy_details["decision"] == "allow"
+            assert approved_policy_details["reason"] == "policy_approved"
+            lifecycle_events = [
+                call.kwargs.get("extra", {}).get("event")
+                for call in mock_logger.info.call_args_list
+            ]
+            assert "request_executing" in lifecycle_events
             assert mock_log_compress.call_args.kwargs["outcome"] == EventOutcome.FAILURE
 
         with (
