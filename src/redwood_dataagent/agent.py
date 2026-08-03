@@ -23,7 +23,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field, ValidationError
 
-from .audit.events import EventOutcome
+from .audit.events import AuditEventType, EventOutcome
 from .audit.logger import (
     log_compress,
     log_extract_data,
@@ -39,6 +39,7 @@ from .config import AgentConfig
 from .dataproduct_registry import DataproductRegistry, load_dataproduct_registry
 from .exceptions import (
     ConfigurationError,
+    InfectedFileError,
     StorageError,
 )
 from .json_utils import resolve_runtime_config_path
@@ -52,6 +53,7 @@ from .models.manifest import (
 )
 from .models.request import DataproductRequest
 from .policy import PolicyApprover
+from .policy.virus_scanner import ScanStatus, scan_file
 from .query_adapter import execute_query
 from .query_templates import ALLOWLISTED_QUERY_TEMPLATES
 from .receiver.landing import ReceiverLandingZone
@@ -2027,6 +2029,58 @@ def _compress_sender_data(archive_path: Path, staged_file: Path, archive_member_
         tar.add(staged_file, arcname=archive_member_name)
 
 
+def _scan_extracted_files(
+    extract_dir: Path,
+    transfer_session_id: str,
+    sender_agency: str,
+    receiver_agency: str,
+) -> None:
+    """Scan all extracted files with ClamAV before allowing storage.
+
+    Iterates every regular file under *extract_dir* and calls scan_file().
+    Fails closed on both infection and scanner error — neither case proceeds
+    to storage.
+
+    Raises
+    ------
+    InfectedFileError
+        If any file is found to be infected.
+    StorageError
+        If the scanner itself fails (binary missing, timeout, exit code 2+).
+    """
+    files = sorted(f for f in extract_dir.rglob("*") if f.is_file())
+    for file_path in files:
+        result = scan_file(file_path)
+        audit = {
+            "event": AuditEventType.VIRUS_SCAN,
+            "file_name": file_path.name,
+            "transfer_session_id": transfer_session_id,
+            "sender_agency": sender_agency,
+            "receiver_agency": receiver_agency,
+        }
+
+        if result.status == ScanStatus.CLEAN:
+            LOGGER.info(
+                prefix_log_message(f"Virus scan clean: {file_path.name}"),
+                extra={**audit, "outcome": EventOutcome.SUCCESS},
+            )
+            continue
+
+        LOGGER.error(
+            prefix_log_message(f"Virus scan {result.status.value.upper()}: {file_path.name} — {result.detail}"),
+            extra={**audit, "outcome": EventOutcome.FAILURE, "detail": result.detail},
+        )
+        if result.status == ScanStatus.INFECTED:
+            raise InfectedFileError(
+                f"Infected file detected in transfer {transfer_session_id}: "
+                f"{file_path.name} — {result.detail}"
+            )
+        raise StorageError(
+            f"Virus scanner error for {file_path.name} in transfer "
+            f"{transfer_session_id}: {result.detail}"
+        )
+
+
 def _process_single_receiver_transfer(
     landing_zone: ReceiverLandingZone,
     target_store: ReceiverTargetStore,
@@ -2102,6 +2156,13 @@ def _process_single_receiver_transfer(
                     archive_bytes=archive_bytes,
                     archive_path=archive_path,
                 ),
+            )
+
+            _scan_extracted_files(
+                extract_dir=extract_dir,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=config.receiver_agency,
             )
 
             _retry_operation(
