@@ -4,7 +4,8 @@
 # it out and forward it to SonarQube.
 FROM public.ecr.aws/docker/library/python:3.13-alpine AS test
 
-RUN apk upgrade --no-cache
+RUN apk upgrade --no-cache && \
+	apk add --no-cache libpq
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
 	PYTHONUNBUFFERED=1
@@ -26,6 +27,7 @@ FROM public.ecr.aws/docker/library/python:3.13-alpine
 # eliminating the perl CVE surface that was present in the Debian-based slim image.
 # Any residual CVEs are from the upstream Alpine base layer.
 RUN apk upgrade --no-cache && \
+	apk add --no-cache libpq && \
 	rm -f /etc/fstab && \
 	rm -f /usr/sbin/crond /usr/bin/crontab
 	
