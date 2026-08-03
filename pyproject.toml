@@ -16,6 +16,7 @@ dependencies = [
   "paramiko>=3.4.0",
   "boto3>=1.34.0",
   "ibis-framework[postgres]>=12.0.0",
+  "psycopg-binary>=3.3.4",
   "packaging>=24.0",
 ]
 
