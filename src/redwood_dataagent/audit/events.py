@@ -45,6 +45,7 @@ class AuditEventType(StrEnum):
     SFTP_TRANSFER_COMPLETE = "sftp_transfer_complete"
     VALIDATE_MANIFEST = "validate_manifest"
     DECOMPRESS = "decompress"
+    VIRUS_SCAN = "virus_scan"
     STORE_DATA = "store_data"
     PIPELINE_COMPLETE = "pipeline_complete"
 

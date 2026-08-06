@@ -5,7 +5,7 @@
 FROM public.ecr.aws/docker/library/python:3.13-alpine AS test
 
 RUN apk upgrade --no-cache && \
-	apk add --no-cache libpq
+	apk add --no-cache libpq clamav clamav-libunrar
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
 	PYTHONUNBUFFERED=1
@@ -27,10 +27,15 @@ FROM public.ecr.aws/docker/library/python:3.13-alpine
 # eliminating the perl CVE surface that was present in the Debian-based slim image.
 # Any residual CVEs are from the upstream Alpine base layer.
 RUN apk upgrade --no-cache && \
-	apk add --no-cache libpq && \
+	apk add --no-cache libpq clamav clamav-libunrar freshclam && \
 	rm -f /etc/fstab && \
 	rm -f /usr/sbin/crond /usr/bin/crontab
-	
+
+# Download ClamAV virus definitions at build time (phase-1 / build-time strategy).
+# Definitions are baked into the image so no outbound network is needed at runtime.
+# Trade-off: definitions are as fresh as the last image build.
+# Follow-up Story will define a controlled update/refresh strategy.
+RUN freshclam --no-warnings || true
 
 # Python runtime flags
 ENV PYTHONDONTWRITEBYTECODE=1 \
