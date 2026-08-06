@@ -2177,6 +2177,38 @@ def _process_single_receiver_transfer(
 
         return 0
 
+    except InfectedFileError as e:
+        # Write a permanent rejection marker so this transfer is never retried.
+        # The existing is_transfer_already_stored pre-check covers .rejected keys,
+        # so subsequent receiver cycles skip it before any S3 fetch or decompress.
+        LOGGER.error(
+            prefix_log_message(
+                f"Transfer from {sender_agency} rejected: {e}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=transfer_session_id,
+            ),
+            extra={
+                "event": "receiver_transfer_rejected",
+                "sender_agency": sender_agency,
+                "transfer_session_id": transfer_session_id,
+                "error_type": type(e).__name__,
+            },
+        )
+        try:
+            target_store.mark_transfer_rejected(
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=config.receiver_agency,
+                reason=str(e),
+            )
+        except Exception as marker_err:
+            LOGGER.error(
+                prefix_log_message(
+                    f"Failed to write rejection marker for {transfer_session_id}: {marker_err}"
+                )
+            )
+        return 1
+
     except Exception as e:
         LOGGER.error(
             prefix_log_message(
