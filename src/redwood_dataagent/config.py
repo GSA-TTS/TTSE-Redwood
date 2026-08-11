@@ -16,7 +16,7 @@ from .storage.conventions import (
     build_sender_bucket,
 )
 
-VALID_AGENT_MODES = {"sender", "receiver"}
+VALID_AGENT_MODES = {"sender", "receiver", "adapter"}
 DEFAULT_MAX_QUERY_ROW_LIMIT = 1_000_000
 DEFAULT_MAX_QUERY_TIMEOUT_SECONDS = 600
 
@@ -206,8 +206,9 @@ def load_config() -> AgentConfig:
     if agent_mode not in VALID_AGENT_MODES:
         raise ConfigurationError(f"AGENT_MODE must be one of {sorted(VALID_AGENT_MODES)}, got '{agent_mode}'")
 
+    # AGENCY is not required for adapter mode — the HTTP server has no data-plane role.
     agency = os.getenv("AGENCY", "").strip().lower()
-    if not agency:
+    if not agency and agent_mode != "adapter":
         raise ConfigurationError("AGENCY is required and cannot be blank")
 
     sender_agency = agency if agent_mode == "sender" else ""
@@ -224,6 +225,7 @@ def load_config() -> AgentConfig:
     if agent_mode == "sender":
         sftp_endpoints, sftp_username, sftp_private_key = _load_sender_sftp_settings()
     else:
+        # adapter and receiver modes do not need SFTP credentials at startup.
         sftp_endpoints = []
         sftp_username = ""
         sftp_private_key = ""

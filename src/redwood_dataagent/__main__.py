@@ -7,6 +7,7 @@ import sys
 import time
 import traceback
 
+from .adapter import app as adapter_app
 from .agent import run_agent
 from .config import load_config
 from .logging_utils import (
@@ -51,6 +52,17 @@ def main() -> int:
                 "environment": initial_config.environment,
             },
         )
+
+        # Route to adapter HTTP server or scheduler loop based on agent mode
+        if initial_config.agent_mode == "adapter":
+            import uvicorn
+
+            logger.info(
+                prefix_log_message("Starting adapter HTTP server", agent_mode="adapter"),
+                extra={"event": "adapter_server_start", "host": "0.0.0.0", "port": 8080},
+            )
+            uvicorn.run(adapter_app, host="0.0.0.0", port=8080, log_config=None)
+            return 0
 
         # Run agent on 5-minute scheduler loop for long-running stateless deployment
         logger.info(
