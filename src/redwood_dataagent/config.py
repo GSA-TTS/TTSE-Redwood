@@ -67,6 +67,9 @@ def _resolve_mode_storage_paths(
         sender_data_directory = f"s3://{sender_staging_bucket}/{FileModeStoragePath.scan_prefix()}"
         return sender_staging_bucket, sender_data_directory, "", ""
 
+    if agent_mode == "adapter":
+        return "", "", "", ""
+
     receiver_landing_bucket = build_receiver_bucket(receiver_agency, environment, "landing")
     receiver_target_bucket = build_receiver_bucket(receiver_agency, environment, "target")
     return "", "", receiver_landing_bucket, receiver_target_bucket
