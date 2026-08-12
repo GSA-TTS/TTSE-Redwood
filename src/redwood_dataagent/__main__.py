@@ -55,13 +55,17 @@ def main() -> int:
 
         # Route to adapter HTTP server or scheduler loop based on agent mode
         if initial_config.agent_mode == "adapter":
+            import os
+
             import uvicorn
 
+            adapter_host = os.getenv("ADAPTER_HOST", "0.0.0.0")  # noqa: S104
+            adapter_port = int(os.getenv("ADAPTER_PORT", "8080"))
             logger.info(
                 prefix_log_message("Starting adapter HTTP server", agent_mode="adapter"),
-                extra={"event": "adapter_server_start", "host": "0.0.0.0", "port": 8080},
+                extra={"event": "adapter_server_start", "host": adapter_host, "port": adapter_port},
             )
-            uvicorn.run(adapter_app, host="0.0.0.0", port=8080, log_config=None)
+            uvicorn.run(adapter_app, host=adapter_host, port=adapter_port, log_config=None)
             return 0
 
         # Run agent on 5-minute scheduler loop for long-running stateless deployment

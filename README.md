@@ -174,6 +174,12 @@ source .venv/bin/activate
 pip install -e '.[test]'
 ```
 
+Or use the one-time bootstrap target:
+
+```bash
+make bootstrap
+```
+
 Run the agent:
 
 ```bash
@@ -183,7 +189,7 @@ python -m redwood_dataagent
 Run tests:
 
 ```bash
-pytest
+make test
 ```
 
 Run lint and coverage with Make targets:
