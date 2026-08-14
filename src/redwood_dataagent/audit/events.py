@@ -11,13 +11,13 @@ not emission logic (see audit/logger.py or __init__.py for event emission).
 """
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class AuditEventType(str, Enum):
+class AuditEventType(StrEnum):
     """
     Enumeration of all Day 1 audit event types.
 
@@ -45,11 +45,12 @@ class AuditEventType(str, Enum):
     SFTP_TRANSFER_COMPLETE = "sftp_transfer_complete"
     VALIDATE_MANIFEST = "validate_manifest"
     DECOMPRESS = "decompress"
+    VIRUS_SCAN = "virus_scan"
     STORE_DATA = "store_data"
     PIPELINE_COMPLETE = "pipeline_complete"
 
 
-class EventOutcome(str, Enum):
+class EventOutcome(StrEnum):
     """
     Enumeration of event outcome states.
 

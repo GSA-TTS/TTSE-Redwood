@@ -177,13 +177,71 @@ class ReceiverTargetStore:
             raise StorageError(error_msg) from e
 
     def is_transfer_already_stored(self, transfer_session_id: str, sender_agency: str) -> bool:
-        """Return whether a transfer has already been stored in target.
+        """Return whether a transfer has already been stored or rejected in target.
 
-        This is a lightweight pre-check used by the receiver workflow so it can
-        skip known-complete transfers before fetch/validate/decompress work.
+        Checks both the completion marker and the rejection marker so that
+        infected transfers are not retried after being quarantined.
         """
-        marker_key = f"processed/{sender_agency}/{transfer_session_id}.done"
-        return self._is_already_stored(marker_key)
+        return self._is_already_stored(
+            f"processed/{sender_agency}/{transfer_session_id}.done"
+        ) or self._is_already_stored(
+            f"processed/{sender_agency}/{transfer_session_id}.rejected"
+        )
+
+    def mark_transfer_rejected(
+        self,
+        transfer_session_id: str,
+        sender_agency: str,
+        receiver_agency: str,
+        reason: str,
+    ) -> None:
+        """Write a rejection marker so this transfer is never retried.
+
+        Uses the same ``processed/{sender_agency}/{transfer_session_id}.rejected``
+        key checked by ``is_transfer_already_stored``.  The marker body records
+        the rejection reason for audit purposes.
+
+        Args:
+            transfer_session_id: Transfer session being rejected
+            sender_agency: Sending agency code
+            receiver_agency: Receiving agency code
+            reason: Human-readable reason for rejection (e.g. virus signature name)
+
+        Raises:
+            StorageError: If the marker cannot be written
+        """
+        marker_key = f"processed/{sender_agency}/{transfer_session_id}.rejected"
+        rejected_at = datetime.now(UTC).isoformat()
+        try:
+            marker_body = {
+                "status": "rejected",
+                "transfer_session_id": transfer_session_id,
+                "sender_agency": sender_agency,
+                "receiver_agency": receiver_agency,
+                "rejected_at": rejected_at,
+                "reason": reason,
+            }
+            self.s3_client._client.put_object(
+                Bucket=self.target_bucket,
+                Key=marker_key,
+                Body=json.dumps(marker_body).encode("utf-8"),
+            )
+            _logger.info(prefix_log_message(f"Created rejection marker {marker_key}"))
+            log_event(
+                event_type=AuditEventType.STORE_DATA,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=receiver_agency,
+                stage="receiver",
+                outcome=EventOutcome.FAILURE,
+                details={
+                    "action": "transfer_rejected",
+                    "marker_key": marker_key,
+                    "reason": reason,
+                },
+            )
+        except Exception as e:
+            raise StorageError(f"Failed to write rejection marker for {transfer_session_id}: {e}") from e
 
     def _is_already_stored(self, marker_key: str) -> bool:
         """Check if marker object exists (idempotency guard).

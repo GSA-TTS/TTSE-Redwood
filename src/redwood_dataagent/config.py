@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from .exceptions import ConfigurationError
+from .models.request import DataproductRequest, load_dataproduct_request
 from .storage.conventions import (
     FileModeStoragePath,
     StoragePurpose,
@@ -15,7 +16,7 @@ from .storage.conventions import (
     build_sender_bucket,
 )
 
-VALID_AGENT_MODES = {"sender", "receiver"}
+VALID_AGENT_MODES = {"sender", "receiver", "adapter"}
 DEFAULT_MAX_QUERY_ROW_LIMIT = 1_000_000
 DEFAULT_MAX_QUERY_TIMEOUT_SECONDS = 600
 
@@ -66,6 +67,9 @@ def _resolve_mode_storage_paths(
         sender_data_directory = f"s3://{sender_staging_bucket}/{FileModeStoragePath.scan_prefix()}"
         return sender_staging_bucket, sender_data_directory, "", ""
 
+    if agent_mode == "adapter":
+        return "", "", "", ""
+
     receiver_landing_bucket = build_receiver_bucket(receiver_agency, environment, "landing")
     receiver_target_bucket = build_receiver_bucket(receiver_agency, environment, "target")
     return "", "", receiver_landing_bucket, receiver_target_bucket
@@ -86,6 +90,14 @@ def _load_positive_int_env(var_name: str, default_value: int) -> int:
         raise ConfigurationError(f"{var_name} must be >= 1, got '{raw_value}'")
 
     return parsed_value
+
+
+def _load_optional_dataproduct_request(raw_request_json: str) -> DataproductRequest | None:
+    """Load a typed dataproduct request only when the env var is populated."""
+    if not raw_request_json or not raw_request_json.strip():
+        return None
+
+    return load_dataproduct_request(raw_request_json)
 
 
 @dataclass(frozen=True)
@@ -116,6 +128,8 @@ class AgentConfig:
     sftp_private_key: str = ""
     sender_input_mode: str = ""
     sender_query_input_json: str = ""
+    dataproduct_request_json: str = ""
+    dataproduct_request: DataproductRequest | None = None
     max_query_row_limit: int = DEFAULT_MAX_QUERY_ROW_LIMIT
     max_query_timeout_seconds: int = DEFAULT_MAX_QUERY_TIMEOUT_SECONDS
 
@@ -170,6 +184,10 @@ def load_config() -> AgentConfig:
         JSON query contract payload used when ``SENDER_INPUT_MODE=query``.
         Expected keys: ``template_id``, ``params``, optional ``row_limit``, and
         optional ``timeout_seconds``.
+    DATAPRODUCT_REQUEST_JSON
+        Optional JSON request payload for dataproduct-driven sender or receiver
+        workflows. When provided it is validated against the committed request
+        schema and normalized into ``AgentConfig.dataproduct_request``.
     MAX_QUERY_ROW_LIMIT
         Optional global maximum allowed query row limit. Defaults to
         ``1000000`` when not provided.
@@ -191,8 +209,9 @@ def load_config() -> AgentConfig:
     if agent_mode not in VALID_AGENT_MODES:
         raise ConfigurationError(f"AGENT_MODE must be one of {sorted(VALID_AGENT_MODES)}, got '{agent_mode}'")
 
+    # AGENCY is not required for adapter mode — the HTTP server has no data-plane role.
     agency = os.getenv("AGENCY", "").strip().lower()
-    if not agency:
+    if not agency and agent_mode != "adapter":
         raise ConfigurationError("AGENCY is required and cannot be blank")
 
     sender_agency = agency if agent_mode == "sender" else ""
@@ -209,6 +228,7 @@ def load_config() -> AgentConfig:
     if agent_mode == "sender":
         sftp_endpoints, sftp_username, sftp_private_key = _load_sender_sftp_settings()
     else:
+        # adapter and receiver modes do not need SFTP credentials at startup.
         sftp_endpoints = []
         sftp_username = ""
         sftp_private_key = ""
@@ -224,6 +244,8 @@ def load_config() -> AgentConfig:
         receiver_agency,
         environment,
     )
+
+    dataproduct_request_json = os.getenv("DATAPRODUCT_REQUEST_JSON", "")
 
     return AgentConfig(
         agent_mode=agent_mode,
@@ -243,6 +265,8 @@ def load_config() -> AgentConfig:
         sftp_private_key=sftp_private_key,
         sender_input_mode=os.getenv("SENDER_INPUT_MODE", ""),
         sender_query_input_json=os.getenv("SENDER_QUERY_INPUT_JSON", ""),
+        dataproduct_request_json=dataproduct_request_json,
+        dataproduct_request=_load_optional_dataproduct_request(dataproduct_request_json),
         max_query_row_limit=_load_positive_int_env("MAX_QUERY_ROW_LIMIT", DEFAULT_MAX_QUERY_ROW_LIMIT),
         max_query_timeout_seconds=_load_positive_int_env(
             "MAX_QUERY_TIMEOUT_SECONDS", DEFAULT_MAX_QUERY_TIMEOUT_SECONDS

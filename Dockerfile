@@ -2,9 +2,10 @@
 # Runs pytest with coverage. Failing tests abort the build before anything is pushed.
 # coverage/coverage.xml is copied into the production image so Jenkins can docker cp
 # it out and forward it to SonarQube.
-FROM public.ecr.aws/docker/library/python:3.13-slim AS test
+FROM public.ecr.aws/docker/library/python:3.13-alpine AS test
 
-RUN apt-get update && apt-get upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache && \
+	apk add --no-cache libpq clamav clamav-libunrar
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
 	PYTHONUNBUFFERED=1
@@ -12,6 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
+COPY config ./config
 COPY src ./src
 COPY tests ./tests
 
@@ -19,18 +21,21 @@ RUN pip install --no-cache-dir -e ".[test]" && mkdir -p coverage && pytest
 
 
 # --- Stage 2: production ---
-FROM public.ecr.aws/docker/library/python:3.13-slim
+FROM public.ecr.aws/docker/library/python:3.13-alpine
 
-# Security: Update system packages to patch known vulnerabilities
-# Note: Some security patches for system libraries (like OpenSSL) are currently 
-# unavailable in the official Debian 13 (Trixie) repositories. 
-# These will be fixed automatically once the Debian Security Team and 
-# Docker Hub release updated versions of the 'python:3.13-slim' image.
-# Troubleshooting support: include vi and psql for ad-hoc pod exec debugging.
-RUN apt-get update && apt-get upgrade -y && \
-	apt-get install -y --no-install-recommends vim-tiny postgresql-client && \
-	apt-get clean && rm -rf /var/lib/apt/lists/*
-	
+# Alpine uses musl libc and does not include perl in any image layer,
+# eliminating the perl CVE surface that was present in the Debian-based slim image.
+# Any residual CVEs are from the upstream Alpine base layer.
+RUN apk upgrade --no-cache && \
+	apk add --no-cache libpq clamav clamav-libunrar freshclam && \
+	rm -f /etc/fstab && \
+	rm -f /usr/sbin/crond /usr/bin/crontab
+
+# Download ClamAV virus definitions at build time (phase-1 / build-time strategy).
+# Definitions are baked into the image so no outbound network is needed at runtime.
+# Trade-off: definitions are as fresh as the last image build.
+# Follow-up Story will define a controlled update/refresh strategy.
+RUN freshclam --no-warnings || true
 
 # Python runtime flags
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -40,15 +45,14 @@ WORKDIR /app
 
 # Package files
 COPY pyproject.toml README.md ./
+COPY config ./config
 COPY src ./src
 
 # Package install
-# Security: Remove setuid and setgid permissions from all executables
-# This prevents privilege escalation attacks (CIS Docker 4.8)
-# Removes system utilities like passwd, su, chmod that are rarely needed in containers
-# Focus on real filesystems (/usr/bin, /bin, /sbin, /usr/sbin) to avoid virtual fs errors
+# Strip setuid and setgid bits from all executables (CIS Docker 4.8).
+# Prevents privilege escalation if a process is compromised inside the container.
 RUN pip install --no-cache-dir . && \
-    find /usr/bin /bin /usr/sbin /sbin -perm /4000 -type f -delete 2>/dev/null || true
+    find /usr/bin /bin /usr/sbin /sbin /usr/lib -perm /6000 -type f -exec chmod a-s {} \; 2>/dev/null || true
 
 # Carry the coverage report forward so Jenkins can extract it with docker cp.
 COPY --from=test /app/coverage ./coverage
@@ -56,7 +60,7 @@ COPY --from=test /app/coverage ./coverage
 # Security: Create non-root user to run the application
 # UID 1000 is standard for application users (UID 0 is root)
 # -m flag creates home directory with proper shell configuration
-RUN useradd -m -u 1000 appuser
+RUN adduser -D -u 1000 appuser
 
 # Switch to non-root user for enhanced security
 USER appuser

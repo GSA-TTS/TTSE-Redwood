@@ -1,5 +1,9 @@
 """Data model exports for Redwood Data Agent."""
 
+from redwood_dataagent.models.dataproduct import (
+    DataproductDefinition,
+    DataproductStatus,
+)
 from redwood_dataagent.models.manifest import (
     ChecksumAlgorithm,
     CompressionType,
@@ -10,6 +14,8 @@ from redwood_dataagent.models.manifest import (
 __all__ = [
     "ChecksumAlgorithm",
     "CompressionType",
+    "DataproductDefinition",
+    "DataproductStatus",
     "ManifestFile",
     "TransferManifest",
 ]
