@@ -53,6 +53,21 @@ class ManifestValidationError(RedwoodDataAgentException):
     pass
 
 
+class InfectedFileError(RedwoodDataAgentException):
+    """
+    Raised when ClamAV detects a virus or malware in a scanned file.
+
+    This includes:
+    - Known virus signature matches
+    - Heuristic detections
+    - Any clamscan exit code 1 result
+
+    The transfer must be rejected and an audit event emitted when this is raised.
+    """
+
+    pass
+
+
 class StorageError(RedwoodDataAgentException):
     """
     Raised when S3 or object storage operations fail.

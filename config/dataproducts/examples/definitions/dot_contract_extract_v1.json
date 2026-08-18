@@ -62,6 +62,16 @@
         "name": "select_fields",
         "type": "array",
         "description": "Optional projection list"
+      },
+      {
+        "name": "filters",
+        "type": "object",
+        "description": "Optional filter constraints; allowed fields and operators are enforced separately via allowed_filters"
+      },
+      {
+        "name": "order_by",
+        "type": "string",
+        "description": "Optional sort clause passed through to the query template"
       }
     ],
     "default_row_limit": 5000,

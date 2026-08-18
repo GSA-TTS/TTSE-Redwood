@@ -18,11 +18,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
+from botocore.exceptions import ClientError
 from pydantic import BaseModel, Field, ValidationError
 
-from .audit.events import EventOutcome
+from .audit.events import AuditEventType, EventOutcome
 from .audit.logger import (
     log_compress,
     log_extract_data,
@@ -35,10 +36,13 @@ from .audit.logger import (
 )
 from .aws.s3 import S3Client
 from .config import AgentConfig
+from .dataproduct_registry import DataproductRegistry, load_dataproduct_registry
 from .exceptions import (
     ConfigurationError,
+    InfectedFileError,
     StorageError,
 )
+from .json_utils import resolve_runtime_config_path
 from .logging_utils import get_logger, logging_context, prefix_log_message
 from .models.manifest import (
     ChecksumAlgorithm,
@@ -47,7 +51,9 @@ from .models.manifest import (
     TransferManifest,
     apply_archive_field_naming,
 )
+from .models.request import DataproductRequest
 from .policy import PolicyApprover
+from .policy.virus_scanner import ScanStatus, scan_file
 from .query_adapter import execute_query
 from .query_templates import ALLOWLISTED_QUERY_TEMPLATES
 from .receiver.landing import ReceiverLandingZone
@@ -68,9 +74,6 @@ DEFAULT_RETRY_ATTEMPTS = 3
 DONE_MARKER_SUFFIX = ".done"
 VALID_SENDER_INPUT_MODES = {"file", "query"}
 QUERY_SKIP_REASON_MATCHING_MARKER = "matching query success marker already exists"
-
-T = TypeVar("T")
-
 
 class SenderQueryInputContract(BaseModel):
     """Runtime query input contract for sender query mode."""
@@ -99,7 +102,16 @@ class SenderTransferArtifacts:
     staged_artifact_keys: list[str]
 
 
-def _retry_operation(operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
+@dataclass
+class FileModeSource:
+    """Resolved file-mode source and marker directory."""
+
+    s3_path: str
+    file_name: str
+    marker_directory: str
+
+
+def _retry_operation[T](operation_name: str, operation: Callable[[], T], attempts: int = DEFAULT_RETRY_ATTEMPTS) -> T:
     """Retry an operation for transient failures before raising StorageError."""
     last_error: Exception | None = None
 
@@ -139,6 +151,39 @@ def _build_file_mode_processed_marker_key(key: str) -> str:
     return f"{processed_prefix}{Path(key).name}{DONE_MARKER_SUFFIX}"
 
 
+def _resolve_file_mode_processed_marker(directory_path: str, file_name: str) -> tuple[str, str]:
+    """Resolve bucket and processed marker key for a file-mode source object."""
+    parsed = _parse_s3_path(directory_path)
+    if parsed is None:
+        raise StorageError(f"Sender directory must be an S3 path, got: {directory_path}")
+
+    bucket, prefix = parsed
+    if not prefix.endswith("/"):
+        prefix = f"{prefix}/"
+
+    processed_prefix = prefix.replace(
+        FileModeStoragePath.scan_prefix(),
+        FileModeStoragePath.processed_prefix(),
+        1,
+    )
+    marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
+    return bucket, marker_key
+
+
+def _marker_exists(client: S3Client, bucket: str, marker_key: str) -> bool:
+    """Return True when an idempotency marker key exists in S3."""
+    try:
+        client._client.head_object(Bucket=bucket, Key=marker_key)
+        return True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise StorageError(f"Failed to check processed marker {marker_key}: {exc}") from exc
+    except Exception as exc:
+        raise StorageError(f"Failed to check processed marker {marker_key}: {exc}") from exc
+
+
 def _extract_data(config: AgentConfig) -> None:
     """Placeholder extraction hook for future implementation.
 
@@ -149,6 +194,237 @@ def _extract_data(config: AgentConfig) -> None:
 
 
 # Sender query-mode helpers
+
+
+def _load_runtime_dataproduct_registry() -> DataproductRegistry:
+    """Load the runtime dataproduct registry from committed file-based definitions.
+
+    The current repo keeps placeholder dataproduct definition instances under
+    ``config/dataproducts/examples/definitions``. They are intentionally treated
+    as runtime seed data for this MVP/WIP phase even though they are not the
+    long-term source of truth. The end-state is to resolve real contracts from a
+    central registry once that integration exists.
+    """
+    # These example definitions are temporary runtime stand-ins until a central
+    # dataproduct contract registry becomes the authoritative source.
+    definitions_dir = resolve_runtime_config_path("dataproducts", "examples", "definitions")
+    schema_path = resolve_runtime_config_path("dataproducts", "schema", "dataproduct.schema.json")
+    return load_dataproduct_registry(definitions_dir=definitions_dir, schema_path=schema_path)
+
+
+def _validate_request_params_against_definition(
+    request: DataproductRequest,
+    definition_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate request params against definition constraints and return extraction block."""
+    extraction = _extract_sql_extraction_config(request.dataproduct_id, definition_payload)
+    required_params, optional_params = _get_param_definitions(request.dataproduct_id, extraction)
+    required_param_names, optional_param_names = _collect_param_names(required_params, optional_params)
+
+    _validate_allowed_and_required_params(
+        dataproduct_id=request.dataproduct_id,
+        params=request.params,
+        required_param_names=required_param_names,
+        optional_param_names=optional_param_names,
+    )
+    _validate_allowed_param_values(
+        params=request.params,
+        param_definitions=required_params + optional_params,
+    )
+    _validate_allowed_select_fields(
+        params=request.params,
+        allowed_select_fields=extraction.get("allowed_select_fields", []),
+    )
+    _validate_allowed_filters(
+        params=request.params,
+        allowed_filters=extraction.get("allowed_filters", []),
+    )
+
+    return extraction
+
+
+def _extract_sql_extraction_config(dataproduct_id: str, definition_payload: dict[str, Any]) -> dict[str, Any]:
+    """Return extraction config and enforce sender query SQL compatibility."""
+    extraction = definition_payload.get("extraction")
+    if not isinstance(extraction, dict):
+        raise ConfigurationError(f"Dataproduct definition for '{dataproduct_id}' is missing extraction constraints")
+
+    source_type = extraction.get("source_type")
+    if source_type != "sql":
+        raise ConfigurationError(
+            "Sender query mode only supports dataproduct definitions with "
+            f"source_type='sql', got '{source_type}' for '{dataproduct_id}'"
+        )
+
+    return extraction
+
+
+def _get_param_definitions(dataproduct_id: str, extraction: dict[str, Any]) -> tuple[list[Any], list[Any]]:
+    """Return required/optional param definition lists from extraction config."""
+    required_params = extraction.get("required_params", [])
+    optional_params = extraction.get("optional_params", [])
+    if not isinstance(required_params, list) or not isinstance(optional_params, list):
+        raise ConfigurationError(f"Dataproduct definition for '{dataproduct_id}' has invalid param definitions")
+    return required_params, optional_params
+
+
+def _collect_param_names(required_params: list[Any], optional_params: list[Any]) -> tuple[set[str], set[str]]:
+    """Return normalized required and optional param names from param definitions."""
+    required_param_names = {
+        str(param.get("name"))
+        for param in required_params
+        if isinstance(param, dict) and isinstance(param.get("name"), str)
+    }
+    optional_param_names = {
+        str(param.get("name"))
+        for param in optional_params
+        if isinstance(param, dict) and isinstance(param.get("name"), str)
+    }
+    return required_param_names, optional_param_names
+
+
+def _validate_allowed_and_required_params(
+    dataproduct_id: str,
+    params: dict[str, Any],
+    required_param_names: set[str],
+    optional_param_names: set[str],
+) -> None:
+    """Enforce allowed param set and required param presence."""
+    allowed_param_names = required_param_names | optional_param_names
+    unknown_params = sorted(param_name for param_name in params if param_name not in allowed_param_names)
+    if unknown_params:
+        raise ConfigurationError(f"Request contains params not allowed by dataproduct '{dataproduct_id}': {unknown_params}")
+
+    missing_required_params = sorted(
+        param_name
+        for param_name in required_param_names
+        if (
+            param_name not in params
+            or params[param_name] is None
+            or (isinstance(params[param_name], str) and not params[param_name].strip())
+        )
+    )
+    if missing_required_params:
+        raise ConfigurationError(f"Missing required params for dataproduct '{dataproduct_id}': {missing_required_params}")
+
+
+def _validate_allowed_param_values(
+    params: dict[str, Any],
+    param_definitions: list[Any],
+) -> None:
+    """Enforce param-level allowed_values constraints when configured."""
+    for param_definition in param_definitions:
+        if not isinstance(param_definition, dict):
+            continue
+
+        param_name = param_definition.get("name")
+        allowed_values = param_definition.get("allowed_values")
+        if not isinstance(param_name, str) or not isinstance(allowed_values, list) or not allowed_values:
+            continue
+
+        if param_name in params and params[param_name] not in allowed_values:
+            raise ConfigurationError(
+                "Param value not allowed by dataproduct definition: "
+                f"param='{param_name}', value='{params[param_name]}', allowed_values={allowed_values}"
+            )
+
+
+def _validate_allowed_select_fields(params: dict[str, Any], allowed_select_fields: Any) -> None:
+    """Enforce allowed select_fields constraints when configured."""
+    if not isinstance(allowed_select_fields, list) or not allowed_select_fields or "select_fields" not in params:
+        return
+
+    select_fields = params["select_fields"]
+    if not isinstance(select_fields, list):
+        raise ConfigurationError("Param 'select_fields' must be an array when provided")
+
+    disallowed_select_fields = sorted(field for field in select_fields if field not in allowed_select_fields)
+    if disallowed_select_fields:
+        raise ConfigurationError(
+            "Request contains select_fields not allowed by dataproduct definition: " f"{disallowed_select_fields}"
+        )
+
+
+def _build_allowed_filter_map(allowed_filters: list[Any]) -> dict[str, set[str]]:
+    """Build lookup of allowed filter fields to operator sets."""
+    allowed_filter_map: dict[str, set[str]] = {}
+    for filter_definition in allowed_filters:
+        if not isinstance(filter_definition, dict):
+            continue
+
+        field_name = filter_definition.get("field")
+        operators = filter_definition.get("operators", [])
+        if isinstance(field_name, str) and isinstance(operators, list):
+            allowed_filter_map[field_name] = {str(operator) for operator in operators}
+    return allowed_filter_map
+
+
+def _validate_allowed_filters(params: dict[str, Any], allowed_filters: Any) -> None:
+    """Enforce allowed filters and operators constraints when configured."""
+    if not isinstance(allowed_filters, list) or not allowed_filters or "filters" not in params:
+        return
+
+    filters = params["filters"]
+    if not isinstance(filters, dict):
+        raise ConfigurationError("Param 'filters' must be an object when provided")
+
+    allowed_filter_map = _build_allowed_filter_map(allowed_filters)
+    unknown_filter_fields = sorted(field_name for field_name in filters if field_name not in allowed_filter_map)
+    if unknown_filter_fields:
+        raise ConfigurationError(
+            "Request contains filter fields not allowed by dataproduct definition: " f"{unknown_filter_fields}"
+        )
+
+    for field_name, operator_map in filters.items():
+        if not isinstance(operator_map, dict):
+            raise ConfigurationError(f"Filter for field '{field_name}' must be an object")
+
+        disallowed_operators = sorted(
+            operator for operator in operator_map if operator not in allowed_filter_map.get(field_name, set())
+        )
+        if disallowed_operators:
+            raise ConfigurationError(
+                "Request contains filter operators not allowed by dataproduct definition: "
+                f"field='{field_name}', operators={disallowed_operators}"
+            )
+
+
+def _resolve_sender_query_contract_input(config: AgentConfig) -> tuple[str, int, int]:
+    """Resolve query contract input from dataproduct request when provided."""
+    if config.dataproduct_request is None:
+        return config.sender_query_input_json, config.max_query_row_limit, config.max_query_timeout_seconds
+
+    request = config.dataproduct_request
+    try:
+        definition = _load_runtime_dataproduct_registry().get(request.dataproduct_id)
+    except KeyError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+    extraction = _validate_request_params_against_definition(request, definition.payload)
+
+    template_id = extraction.get("template_id")
+    if not isinstance(template_id, str) or not template_id.strip():
+        raise ConfigurationError(
+            f"Dataproduct definition for '{request.dataproduct_id}' is missing extraction.template_id"
+        )
+
+    definition_default_row_limit = int(extraction.get("default_row_limit", config.max_query_row_limit))
+    definition_max_row_limit = int(extraction.get("max_row_limit", config.max_query_row_limit))
+    definition_default_timeout_seconds = int(extraction.get("default_timeout_seconds", config.max_query_timeout_seconds))
+    definition_max_timeout_seconds = int(extraction.get("max_timeout_seconds", config.max_query_timeout_seconds))
+
+    row_limit = request.requested_row_limit or definition_default_row_limit
+    timeout_seconds = request.requested_timeout_seconds or definition_default_timeout_seconds
+
+    payload = {
+        "template_id": template_id,
+        "params": request.params,
+        "row_limit": row_limit,
+        "timeout_seconds": timeout_seconds,
+    }
+    effective_row_limit_cap = min(config.max_query_row_limit, definition_max_row_limit)
+    effective_timeout_cap = min(config.max_query_timeout_seconds, definition_max_timeout_seconds)
+    return json.dumps(payload), effective_row_limit_cap, effective_timeout_cap
 
 
 def _validate_sender_query_input_contract(
@@ -218,6 +494,20 @@ def _validate_sender_query_input_contract(
     return contract
 
 
+def _resolve_and_validate_sender_query_contract(config: AgentConfig) -> SenderQueryInputContract:
+    """Resolve sender query contract input and validate it into a typed contract."""
+    (
+        raw_contract_json,
+        effective_row_limit_cap,
+        effective_timeout_cap,
+    ) = _resolve_sender_query_contract_input(config)
+    return _validate_sender_query_input_contract(
+        raw_contract_json,
+        max_query_row_limit=effective_row_limit_cap,
+        max_query_timeout_seconds=effective_timeout_cap,
+    )
+
+
 def _create_sender_query_workflow(config: AgentConfig) -> None:
     """Execute validated query contract and produce staged CSV output.
 
@@ -248,11 +538,7 @@ def _create_sender_query_workflow(config: AgentConfig) -> None:
     )
 
     try:
-        contract = _validate_sender_query_input_contract(
-            config.sender_query_input_json,
-            max_query_row_limit=config.max_query_row_limit,
-            max_query_timeout_seconds=config.max_query_timeout_seconds,
-        )
+        contract = _resolve_and_validate_sender_query_contract(config)
     except ConfigurationError as exc:
         LOGGER.error(
             prefix_log_message(
@@ -570,13 +856,9 @@ def _scan_sender_directory(directory_path: str, aws_region: str) -> list[tuple[s
 
             # Check if file has been processed (marker exists in processed/)
             processed_marker_key = _build_file_mode_processed_marker_key(key)
-            try:
-                client._client.head_object(Bucket=bucket, Key=processed_marker_key)
+            if _marker_exists(client, bucket, processed_marker_key):
                 LOGGER.debug(f"Skipping already processed file: {key}")
                 continue
-            except Exception:
-                # Marker doesn't exist, file is ready to process
-                pass
 
             s3_path = f"s3://{bucket}/{key}"
             files.append((s3_path, file_name))
@@ -604,23 +886,8 @@ def _mark_file_processed(file_name: str, directory_path: str, aws_region: str) -
         If marker creation fails
     """
     try:
-        parsed = _parse_s3_path(directory_path)
-        if parsed is None:
-            raise StorageError(f"Sender directory must be an S3 path, got: {directory_path}")
-
-        bucket, prefix = parsed
+        bucket, marker_key = _resolve_file_mode_processed_marker(directory_path, file_name)
         client = S3Client(aws_region=aws_region)
-
-        # Create marker in file-mode processed directory using absolute path.
-        if not prefix.endswith("/"):
-            prefix = f"{prefix}/"
-
-        processed_prefix = prefix.replace(
-            FileModeStoragePath.scan_prefix(),
-            FileModeStoragePath.processed_prefix(),
-            1,
-        )
-        marker_key = f"{processed_prefix}{file_name}{DONE_MARKER_SUFFIX}"
         timestamp = datetime.now(UTC).isoformat()
         marker_metadata = {
             "processed_at": timestamp,
@@ -890,8 +1157,127 @@ def _build_sender_transfer_key(selected_mode: str, transfer_session_id: str, fil
     return FileModeStoragePath.transfers(transfer_session_id, file_name)
 
 
-def _select_file_mode_source(config: AgentConfig) -> tuple[str, str] | None:
-    """Return (s3_path, file_name) for file mode, or None when no work exists."""
+def _extract_file_extraction_config(dataproduct_id: str, definition_payload: dict[str, Any]) -> dict[str, Any]:
+    """Return extraction config and enforce sender file-mode compatibility."""
+    extraction = definition_payload.get("extraction")
+    if not isinstance(extraction, dict):
+        raise ConfigurationError(f"Dataproduct definition for '{dataproduct_id}' is missing extraction constraints")
+
+    source_type = extraction.get("source_type")
+    if source_type != "file":
+        raise ConfigurationError(
+            "Sender file mode only supports dataproduct definitions with "
+            f"source_type='file', got '{source_type}' for '{dataproduct_id}'"
+        )
+
+    engine = extraction.get("engine")
+    if engine != "s3-file":
+        raise ConfigurationError(
+            "Sender file mode only supports dataproduct definitions with "
+            f"engine='s3-file', got '{engine}' for '{dataproduct_id}'"
+        )
+
+    return extraction
+
+
+def _resolve_file_mode_source_from_request(config: AgentConfig) -> FileModeSource | None:
+    """Resolve file-mode source from dataproduct request when provided."""
+    request = config.dataproduct_request
+    if request is None:
+        return None
+
+    try:
+        definition = _load_runtime_dataproduct_registry().get(request.dataproduct_id)
+    except KeyError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+    extraction = _extract_file_extraction_config(request.dataproduct_id, definition.payload)
+    required_params, optional_params = _get_param_definitions(request.dataproduct_id, extraction)
+    required_param_names, optional_param_names = _collect_param_names(required_params, optional_params)
+    _validate_allowed_and_required_params(
+        dataproduct_id=request.dataproduct_id,
+        params=request.params,
+        required_param_names=required_param_names,
+        optional_param_names=optional_param_names,
+    )
+    _validate_allowed_param_values(
+        params=request.params,
+        param_definitions=required_params + optional_params,
+    )
+
+    s3_path_value = request.params.get("s3_path")
+    if not isinstance(s3_path_value, str) or not s3_path_value.strip():
+        raise ConfigurationError("File-mode dataproduct request requires params.s3_path as a non-empty string")
+
+    s3_path = s3_path_value.strip()
+    parsed = _parse_s3_path(s3_path)
+    if parsed is None:
+        raise ConfigurationError(f"File-mode param 's3_path' must be an S3 URL, got: {s3_path}")
+
+    bucket, key = parsed
+    file_name_value = request.params.get("file_name")
+    if isinstance(file_name_value, str) and file_name_value.strip():
+        file_name = file_name_value.strip()
+    else:
+        file_name = Path(key).name
+    if not file_name:
+        raise ConfigurationError(f"File-mode param 's3_path' must include an object key, got: {s3_path}")
+
+    parent_key = key.rsplit("/", 1)[0] if "/" in key else ""
+    marker_directory = f"s3://{bucket}/{parent_key}/" if parent_key else f"s3://{bucket}/"
+    return FileModeSource(
+        s3_path=s3_path,
+        file_name=file_name,
+        marker_directory=marker_directory,
+    )
+
+
+def _select_file_mode_source(config: AgentConfig) -> FileModeSource | None:
+    """Return resolved file-mode source, or None when no work exists."""
+    request_source = _resolve_file_mode_source_from_request(config)
+    if request_source is not None:
+        marker_bucket, marker_key = _resolve_file_mode_processed_marker(
+            request_source.marker_directory,
+            request_source.file_name,
+        )
+        if _retry_operation(
+            "check_file_processed",
+            lambda: _marker_exists(
+                S3Client(aws_region=config.aws_region),
+                marker_bucket,
+                marker_key,
+            ),
+        ):
+            LOGGER.info(
+                prefix_log_message(
+                    "No new file read. Exiting sender workflow (idempotent).",
+                    agent_mode=config.agent_mode,
+                    transfer_session_id=config.transfer_session_id,
+                ),
+                extra={
+                    "event": "sender_no_files",
+                    "resolution": "dataproduct_request",
+                    "file_name": request_source.file_name,
+                    "s3_path": request_source.s3_path,
+                },
+            )
+            return None
+
+        LOGGER.info(
+            prefix_log_message(
+                "Resolved file-mode source from dataproduct request",
+                agent_mode=config.agent_mode,
+                transfer_session_id=config.transfer_session_id,
+            ),
+            extra={
+                "event": "sender_file_source_resolved",
+                "resolution": "dataproduct_request",
+                "s3_path": request_source.s3_path,
+                "file_name": request_source.file_name,
+            },
+        )
+        return request_source
+
     if not config.sender_data_directory:
         LOGGER.warning(
             prefix_log_message(
@@ -945,7 +1331,11 @@ def _select_file_mode_source(config: AgentConfig) -> tuple[str, str] | None:
         ),
         extra={"event": "sender_process_start", "file_name": file_name, "s3_path": s3_path},
     )
-    return s3_path, file_name
+    return FileModeSource(
+        s3_path=s3_path,
+        file_name=file_name,
+        marker_directory=config.sender_data_directory,
+    )
 
 
 def _prepare_query_mode_input(config: AgentConfig, tmpdir_path: Path) -> SenderInputPreparation | None:
@@ -955,11 +1345,7 @@ def _prepare_query_mode_input(config: AgentConfig, tmpdir_path: Path) -> SenderI
     failure, or idempotent skip) after logging the appropriate audit events.
     """
     try:
-        contract = _validate_sender_query_input_contract(
-            config.sender_query_input_json,
-            max_query_row_limit=config.max_query_row_limit,
-            max_query_timeout_seconds=config.max_query_timeout_seconds,
-        )
+        contract = _resolve_and_validate_sender_query_contract(config)
     except ConfigurationError as exc:
         log_extract_data(
             transfer_session_id=config.transfer_session_id,
@@ -1181,6 +1567,31 @@ def _prepare_file_mode_input(
         raise StorageError(f"Failed to download {s3_path}: {e}") from e
 
 
+def _build_policy_check_details(config: AgentConfig, file_count: int, is_approved: bool) -> dict[str, Any]:
+    """Build audit detail payload for sender policy check outcomes."""
+    details: dict[str, Any] = {
+        "decision": "allow" if is_approved else "deny",
+        "reason": "policy_approved" if is_approved else "policy_approval_denied",
+        "file_count": file_count,
+    }
+
+    request = config.dataproduct_request
+    if request is None:
+        return details
+
+    details["request_id"] = request.request_id
+    details["dataproduct_id"] = request.dataproduct_id
+    classification_tags = {
+        key: value
+        for key, value in request.metadata.items()
+        if "classification" in key.lower()
+    }
+    if classification_tags:
+        details["classification_tags"] = classification_tags
+
+    return details
+
+
 def _run_sender_transfer_pipeline(
     config: AgentConfig,
     selected_mode: str,
@@ -1196,21 +1607,48 @@ def _run_sender_transfer_pipeline(
     )
 
     if not is_approved:
+        policy_details = _build_policy_check_details(config=config, file_count=1, is_approved=False)
         log_policy_check(
             transfer_session_id=config.transfer_session_id,
             sender_agency=config.sender_agency,
             receiver_agency=config.receiver_agency,
             outcome=EventOutcome.FAILURE,
-            details={"reason": "Policy approval denied", "file_count": 1},
+            details=policy_details,
         )
         return None
 
+    policy_details = _build_policy_check_details(config=config, file_count=1, is_approved=True)
     log_policy_check(
         transfer_session_id=config.transfer_session_id,
         sender_agency=config.sender_agency,
         receiver_agency=config.receiver_agency,
         outcome=EventOutcome.SUCCESS,
-        details={"file_count": 1},
+        details=policy_details,
+    )
+
+    request_executing_event: dict[str, Any] = {
+        "event": "request_executing",
+        "selected_mode": selected_mode,
+        "file_name": file_name,
+        "policy_decision": "allow",
+    }
+    request_id = policy_details.get("request_id")
+    dataproduct_id = policy_details.get("dataproduct_id")
+    classification_tags = policy_details.get("classification_tags")
+    if isinstance(request_id, str):
+        request_executing_event["request_id"] = request_id
+    if isinstance(dataproduct_id, str):
+        request_executing_event["dataproduct_id"] = dataproduct_id
+    if isinstance(classification_tags, dict):
+        request_executing_event["classification_tags"] = classification_tags
+
+    LOGGER.info(
+        prefix_log_message(
+            "Request executing",
+            agent_mode=config.agent_mode,
+            transfer_session_id=config.transfer_session_id,
+        ),
+        extra=request_executing_event,
     )
 
     archive_path = tmpdir_path / DEFAULT_ARCHIVE_FILE_NAME
@@ -1449,7 +1887,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             },
         )
 
-        file_mode_source: tuple[str, str] | None = None
+        file_mode_source: FileModeSource | None = None
         if selected_mode != "query":
             file_mode_source = _select_file_mode_source(config)
             if file_mode_source is None:
@@ -1471,12 +1909,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             else:
                 if file_mode_source is None:
                     raise StorageError("File mode source selection was not initialized")
-                s3_path, file_name = file_mode_source
                 prepared_input = _prepare_file_mode_input(
                     config,
                     tmpdir_path,
-                    s3_path,
-                    file_name,
+                    file_mode_source.s3_path,
+                    file_mode_source.file_name,
                 )
 
             if prepared_input is None:
@@ -1520,9 +1957,11 @@ def _create_sender_workflow(config: AgentConfig) -> int:
 
             # 6. Mark file as processed for file mode inputs.
             if selected_mode != "query":
+                if file_mode_source is None:
+                    raise StorageError("File mode source selection was not initialized")
                 _retry_operation(
                     "mark_file_processed",
-                    lambda: _mark_file_processed(file_name, config.sender_data_directory, config.aws_region),
+                    lambda: _mark_file_processed(file_name, file_mode_source.marker_directory, config.aws_region),
                 )
                 LOGGER.info(
                     prefix_log_message(
@@ -1534,7 +1973,7 @@ def _create_sender_workflow(config: AgentConfig) -> int:
                         "event": "sender_file_marked",
                         "file_name": file_name,
                         "marker_location": (
-                            f"{config.sender_data_directory}../"
+                            f"{file_mode_source.marker_directory}../"
                             f"{FileModeStoragePath.processed_prefix()}{file_name}{DONE_MARKER_SUFFIX}"
                         ),
                     },
@@ -1588,6 +2027,58 @@ def _compress_sender_data(archive_path: Path, staged_file: Path, archive_member_
     """Create transfer archive for sender payload."""
     with tarfile.open(archive_path, "w:gz") as tar:  # NOSONAR
         tar.add(staged_file, arcname=archive_member_name)
+
+
+def _scan_extracted_files(
+    extract_dir: Path,
+    transfer_session_id: str,
+    sender_agency: str,
+    receiver_agency: str,
+) -> None:
+    """Scan all extracted files with ClamAV before allowing storage.
+
+    Iterates every regular file under *extract_dir* and calls scan_file().
+    Fails closed on both infection and scanner error — neither case proceeds
+    to storage.
+
+    Raises
+    ------
+    InfectedFileError
+        If any file is found to be infected.
+    StorageError
+        If the scanner itself fails (binary missing, timeout, exit code 2+).
+    """
+    files = sorted(f for f in extract_dir.rglob("*") if f.is_file())
+    for file_path in files:
+        result = scan_file(file_path)
+        audit = {
+            "event": AuditEventType.VIRUS_SCAN,
+            "file_name": file_path.name,
+            "transfer_session_id": transfer_session_id,
+            "sender_agency": sender_agency,
+            "receiver_agency": receiver_agency,
+        }
+
+        if result.status == ScanStatus.CLEAN:
+            LOGGER.info(
+                prefix_log_message(f"Virus scan clean: {file_path.name}"),
+                extra={**audit, "outcome": EventOutcome.SUCCESS},
+            )
+            continue
+
+        LOGGER.error(
+            prefix_log_message(f"Virus scan {result.status.value.upper()}: {file_path.name} — {result.detail}"),
+            extra={**audit, "outcome": EventOutcome.FAILURE, "detail": result.detail},
+        )
+        if result.status == ScanStatus.INFECTED:
+            raise InfectedFileError(
+                f"Infected file detected in transfer {transfer_session_id}: "
+                f"{file_path.name} — {result.detail}"
+            )
+        raise StorageError(
+            f"Virus scanner error for {file_path.name} in transfer "
+            f"{transfer_session_id}: {result.detail}"
+        )
 
 
 def _process_single_receiver_transfer(
@@ -1667,6 +2158,13 @@ def _process_single_receiver_transfer(
                 ),
             )
 
+            _scan_extracted_files(
+                extract_dir=extract_dir,
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=config.receiver_agency,
+            )
+
             _retry_operation(
                 "store_to_target",
                 lambda: target_store.store_to_target(
@@ -1678,6 +2176,38 @@ def _process_single_receiver_transfer(
             )
 
         return 0
+
+    except InfectedFileError as e:
+        # Write a permanent rejection marker so this transfer is never retried.
+        # The existing is_transfer_already_stored pre-check covers .rejected keys,
+        # so subsequent receiver cycles skip it before any S3 fetch or decompress.
+        LOGGER.error(
+            prefix_log_message(
+                f"Transfer from {sender_agency} rejected: {e}",
+                agent_mode=config.agent_mode,
+                transfer_session_id=transfer_session_id,
+            ),
+            extra={
+                "event": "receiver_transfer_rejected",
+                "sender_agency": sender_agency,
+                "transfer_session_id": transfer_session_id,
+                "error_type": type(e).__name__,
+            },
+        )
+        try:
+            target_store.mark_transfer_rejected(
+                transfer_session_id=transfer_session_id,
+                sender_agency=sender_agency,
+                receiver_agency=config.receiver_agency,
+                reason=str(e),
+            )
+        except Exception as marker_err:
+            LOGGER.error(
+                prefix_log_message(
+                    f"Failed to write rejection marker for {transfer_session_id}: {marker_err}"
+                )
+            )
+        return 1
 
     except Exception as e:
         LOGGER.error(
@@ -1940,4 +2470,4 @@ def run_agent(config: AgentConfig) -> int:
     elif config.agent_mode == "receiver":
         return _create_receiver_workflow(config)
     else:
-        raise ConfigurationError(f"Invalid agent mode: {config.agent_mode}. " f"Must be 'sender' or 'receiver'.")
+        raise ConfigurationError(f"Invalid agent mode: {config.agent_mode}. Must be 'sender' or 'receiver'.")

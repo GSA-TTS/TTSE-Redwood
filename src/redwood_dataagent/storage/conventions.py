@@ -24,7 +24,7 @@ Path patterns:
 - Receiver extracted: extracted/{transfer_session_id}/{file_name}
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -42,7 +42,7 @@ QUERY_MODE_PROCESSED_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/processed/"
 QUERY_MODE_TRANSFERS_PREFIX = f"{QUERY_MODE_ROOT_PREFIX}/transfers"
 
 
-class StoragePurpose(str, Enum):
+class StoragePurpose(StrEnum):
     """Storage purposes in the Day 1 transfer pipeline."""
 
     STAGING = "staging"
@@ -148,7 +148,7 @@ class QueryModeStoragePath(BaseModel):
         if not fingerprint or not fingerprint.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
 
-        return f"{QUERY_MODE_PROCESSED_PREFIX}{template_id.strip()}/" f"{fingerprint.strip()}.done"
+        return f"{QUERY_MODE_PROCESSED_PREFIX}{template_id.strip()}/{fingerprint.strip()}.done"
 
     @staticmethod
     def transfers(transfer_session_id: str, file_name: str) -> str:
@@ -158,7 +158,7 @@ class QueryModeStoragePath(BaseModel):
         if not file_name or not file_name.strip():
             raise ValueError(_BLANK_PATH_COMPONENT_MSG)
 
-        return f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id.strip()}/" f"{file_name.strip()}"
+        return f"{QUERY_MODE_TRANSFERS_PREFIX}/{transfer_session_id.strip()}/{file_name.strip()}"
 
     @staticmethod
     def transfer_prefix(transfer_session_id: str) -> str:

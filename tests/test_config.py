@@ -1,5 +1,8 @@
 """Unit tests for configuration loading and validation."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from redwood_dataagent.config import AgentConfig, load_config
@@ -26,6 +29,7 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SFTP_PRIVATE_KEY",
         "SENDER_INPUT_MODE",
         "SENDER_QUERY_INPUT_JSON",
+        "DATAPRODUCT_REQUEST_JSON",
         "MAX_QUERY_ROW_LIMIT",
         "MAX_QUERY_TIMEOUT_SECONDS",
     ):
@@ -37,6 +41,15 @@ def _clear_all_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SFTP_PRIVATE_KEY",
         "-----BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END OPENSSH PRIVATE KEY-----",
     )
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _load_request_payload(filename: str = "sample-sender-request.json") -> str:
+    request_path = _repo_root() / "config" / "dataproducts" / "examples" / "requests" / filename
+    return request_path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +74,7 @@ def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.log_level == "INFO"
     assert config.transfer_session_id  # auto-generated UUID is non-empty
     assert config.sender_data_directory == ""  # not applicable in receiver mode
+    assert config.dataproduct_request is None
 
 
 def test_load_config_missing_agency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,6 +123,36 @@ def test_load_config_sender_input_mode_preserves_value(monkeypatch: pytest.Monke
     config = load_config()
 
     assert config.sender_input_mode == "QUERY"
+
+
+def test_load_config_dataproduct_request_json_returns_normalized_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DATAPRODUCT_REQUEST_JSON is parsed into a typed normalized request."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+
+    payload = json.loads(_load_request_payload())
+    payload["dataproduct_id"] = "  DOT_CONTRACT_EXTRACT  "
+    monkeypatch.setenv("DATAPRODUCT_REQUEST_JSON", json.dumps(payload))
+
+    config = load_config()
+
+    assert config.dataproduct_request_json
+    assert config.dataproduct_request is not None
+    assert config.dataproduct_request.dataproduct_id == "dot_contract_extract"
+
+
+def test_load_config_invalid_dataproduct_request_json_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Invalid DATAPRODUCT_REQUEST_JSON fails fast during config load."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "sender")
+    monkeypatch.setenv("AGENCY", "dot")
+    monkeypatch.setenv("DATAPRODUCT_REQUEST_JSON", "{}")
+
+    with pytest.raises(ConfigurationError, match="Schema validation failed"):
+        load_config()
 
 
 def test_load_config_query_caps_default_values(monkeypatch: pytest.MonkeyPatch) -> None:
