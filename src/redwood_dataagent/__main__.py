@@ -65,7 +65,7 @@ def main() -> int:
                 prefix_log_message("Starting adapter HTTP server", agent_mode="adapter"),
                 extra={"event": "adapter_server_start", "host": adapter_host, "port": adapter_port},
             )
-            uvicorn.run(adapter_app, host=adapter_host, port=adapter_port, log_config=None)
+            uvicorn.run(adapter_app, host=adapter_host, port=adapter_port, log_config=None, access_log=False)
             return 0
 
         # Run agent on 5-minute scheduler loop for long-running stateless deployment
