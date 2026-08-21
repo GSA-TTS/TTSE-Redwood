@@ -177,3 +177,66 @@ class TestOutboundStatus:
 
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Job 'missing-job' not found."
+
+
+class TestOutboundCancel:
+    def test_cancel_pending_job_returns_200(self) -> None:
+        store = make_store()
+        store.create("job-1")
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.delete("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["job_id"] == "job-1"
+        assert body["status"] == JobStatus.CANCELLED
+
+    def test_cancel_running_job_returns_200(self) -> None:
+        store = make_store()
+        store.create("job-1")
+        store.transition("job-1", JobStatus.RUNNING)
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.delete("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == JobStatus.CANCELLED
+
+    def test_cancel_sent_job_returns_409(self) -> None:
+        store = make_store()
+        store.create("job-1")
+        store.transition("job-1", JobStatus.RUNNING)
+        store.transition("job-1", JobStatus.SENT, result=JobResult("abc123", 123))
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.delete("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 409
+        assert "already terminal" in resp.json()["detail"]
+
+    def test_cancel_failed_job_returns_409(self) -> None:
+        store = make_store()
+        store.create("job-1")
+        store.transition("job-1", JobStatus.RUNNING)
+        store.transition("job-1", JobStatus.FAILED, error="boom")
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.delete("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 409
+        assert "already terminal" in resp.json()["detail"]
+
+    def test_cancel_unknown_job_returns_404(self) -> None:
+        store = make_store()
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.delete("/adapter/v1/outbound/missing-job")
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Job 'missing-job' not found."
