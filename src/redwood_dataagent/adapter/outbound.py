@@ -13,11 +13,33 @@ from fastapi.responses import JSONResponse
 
 from redwood_dataagent.adapter.job_store import (
     DuplicateJobError,
+    JobNotFoundError,
     JobStatus,
     get_job_store,
 )
 
 router = APIRouter()
+
+
+def _serialize_job(job_id: str) -> dict[str, object]:
+    """Return a JSON-ready representation of one adapter job."""
+    store = get_job_store()
+    job = store.get(job_id)
+
+    payload: dict[str, object] = {
+        "job_id": job.id,
+        "status": job.status,
+        "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat(),
+    }
+    if job.result is not None:
+        payload["result"] = {
+            "checksum_sha256": job.result.checksum_sha256,
+            "file_size_bytes": job.result.file_size_bytes,
+        }
+    if job.error is not None:
+        payload["error"] = job.error
+    return payload
 
 
 def _run_sender(job_id: str) -> None:
@@ -79,3 +101,23 @@ def dispatch_outbound_job(job_id: str) -> JSONResponse:
         status_code=HTTPStatus.ACCEPTED,
         content={"job_id": job_id, "status": JobStatus.PENDING},
     )
+
+
+@router.get("/adapter/v1/outbound/{job_id}")
+def get_outbound_job_status(job_id: str) -> JSONResponse:
+    """Return current state for one outbound job.
+
+    Returns:
+        200 OK     — job exists; current status payload returned.
+        404 Not Found — unknown job ID.
+    """
+    try:
+        return JSONResponse(
+            status_code=HTTPStatus.OK,
+            content=_serialize_job(job_id),
+        )
+    except JobNotFoundError:
+        return JSONResponse(
+            status_code=HTTPStatus.NOT_FOUND,
+            content={"detail": f"Job '{job_id}' not found."},
+        )

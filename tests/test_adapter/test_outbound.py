@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from redwood_dataagent.adapter import app
-from redwood_dataagent.adapter.job_store import JobStatus, JobStore
+from redwood_dataagent.adapter.job_store import JobResult, JobStatus, JobStore
 
 
 def make_client(store: JobStore) -> TestClient:
@@ -98,7 +97,6 @@ class TestOutboundDispatch:
         store = make_store()
         store.create("old-job")
         store.transition("old-job", JobStatus.RUNNING)
-        from redwood_dataagent.adapter.job_store import JobResult
         store.transition("old-job", JobStatus.SENT, result=JobResult("abc", 100))
 
         with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store), \
@@ -108,3 +106,74 @@ class TestOutboundDispatch:
             resp = client.put("/adapter/v1/outbound/new-job")
 
         assert resp.status_code == 202
+
+
+class TestOutboundStatus:
+    def test_known_pending_job_returns_200(self) -> None:
+        store = make_store()
+        store.create("job-1")
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.get("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["job_id"] == "job-1"
+        assert body["status"] == JobStatus.PENDING
+        assert "result" not in body
+        assert "error" not in body
+
+    def test_known_running_job_returns_200(self) -> None:
+        store = make_store()
+        store.create("job-1")
+        store.transition("job-1", JobStatus.RUNNING)
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.get("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == JobStatus.RUNNING
+
+    def test_sent_job_includes_result(self) -> None:
+        store = make_store()
+        store.create("job-1")
+        store.transition("job-1", JobStatus.RUNNING)
+        store.transition("job-1", JobStatus.SENT, result=JobResult("abc123", 1024))
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.get("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == JobStatus.SENT
+        assert body["result"] == {"checksum_sha256": "abc123", "file_size_bytes": 1024}
+        assert "error" not in body
+
+    def test_failed_job_includes_error(self) -> None:
+        store = make_store()
+        store.create("job-1")
+        store.transition("job-1", JobStatus.RUNNING)
+        store.transition("job-1", JobStatus.FAILED, error="sender crashed")
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.get("/adapter/v1/outbound/job-1")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == JobStatus.FAILED
+        assert body["error"] == "sender crashed"
+        assert "result" not in body
+
+    def test_unknown_job_returns_404(self) -> None:
+        store = make_store()
+
+        with patch("redwood_dataagent.adapter.outbound.get_job_store", return_value=store):
+            client = TestClient(app)
+            resp = client.get("/adapter/v1/outbound/missing-job")
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Job 'missing-job' not found."
