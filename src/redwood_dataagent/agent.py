@@ -2465,7 +2465,7 @@ def run_agent(config: AgentConfig) -> int:
     int
         Exit code (0 for success, non-zero for failure).
     """
-    if config.agent_mode == "sender":
+    if config.agent_mode in {"sender", "adapter"}:
         return _create_sender_workflow(config)
     elif config.agent_mode == "receiver":
         return _create_receiver_workflow(config)

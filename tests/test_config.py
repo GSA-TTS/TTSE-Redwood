@@ -92,6 +92,20 @@ def test_load_config_returns_agent_config_instance(monkeypatch: pytest.MonkeyPat
     assert isinstance(load_config(), AgentConfig)
 
 
+def test_load_config_adapter_mode_uses_sender_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adapter mode loads sender settings for outbound execution."""
+    _clear_all_env(monkeypatch)
+    monkeypatch.setenv("AGENT_MODE", "adapter")
+    monkeypatch.setenv("AGENCY", "dot")
+
+    config = load_config()
+
+    assert config.agent_mode == "adapter"
+    assert config.sender_agency == "dot"
+    assert config.receiver_agency == ""
+    assert config.sftp_endpoints == ["sftp.example.com"]
+
+
 def test_load_config_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
     """AgentConfig is frozen – direct attribute assignment raises FrozenInstanceError."""
     _clear_all_env(monkeypatch)
