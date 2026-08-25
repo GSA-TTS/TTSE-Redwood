@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from redwood_dataagent.adapter.job_store import (
     DuplicateJobError,
+    InvalidTransitionError,
     JobNotFoundError,
     JobStatus,
     get_job_store,
@@ -120,4 +121,33 @@ def get_outbound_job_status(job_id: str) -> JSONResponse:
         return JSONResponse(
             status_code=HTTPStatus.NOT_FOUND,
             content={"detail": f"Job '{job_id}' not found."},
+        )
+
+
+@router.delete("/adapter/v1/outbound/{job_id}")
+def cancel_outbound_job(job_id: str) -> JSONResponse:
+    """Cancel one outbound job.
+
+    Returns:
+        200 OK          — job was pending/running and is now cancelled.
+        404 Not Found   — unknown job ID.
+        409 Conflict    — job is already terminal and cannot be cancelled.
+    """
+    store = get_job_store()
+
+    try:
+        store.transition(job_id, JobStatus.CANCELLED)
+        return JSONResponse(
+            status_code=HTTPStatus.OK,
+            content=_serialize_job(job_id),
+        )
+    except JobNotFoundError:
+        return JSONResponse(
+            status_code=HTTPStatus.NOT_FOUND,
+            content={"detail": f"Job '{job_id}' not found."},
+        )
+    except InvalidTransitionError:
+        return JSONResponse(
+            status_code=HTTPStatus.CONFLICT,
+            content={"detail": f"Job '{job_id}' is already terminal and cannot be cancelled."},
         )
