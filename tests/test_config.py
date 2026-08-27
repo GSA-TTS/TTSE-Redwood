@@ -103,6 +103,8 @@ def test_load_config_adapter_mode_uses_sender_settings(monkeypatch: pytest.Monke
     assert config.agent_mode == "adapter"
     assert config.sender_agency == "dot"
     assert config.receiver_agency == ""
+    assert config.sender_staging_bucket == "tts-core-development-dot-data-staging"
+    assert config.sender_data_directory == "s3://tts-core-development-dot-data-staging/file_mode/outgoing/"
     assert config.sftp_endpoints == ["sftp.example.com"]
 
 
