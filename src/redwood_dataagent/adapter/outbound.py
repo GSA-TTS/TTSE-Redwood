@@ -57,7 +57,6 @@ def _run_sender(job_id: str) -> None:
         result_code = run_agent(config)
 
         if result_code == 0:
-            # Placeholder result — checksum and file size will be populated in a upcoming increment
             result = JobResult(checksum_sha256="", file_size_bytes=0)
             store.transition(job_id, JobStatus.SENT, result=result)
         else:

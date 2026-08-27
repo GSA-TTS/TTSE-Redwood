@@ -209,12 +209,11 @@ def load_config() -> AgentConfig:
     if agent_mode not in VALID_AGENT_MODES:
         raise ConfigurationError(f"AGENT_MODE must be one of {sorted(VALID_AGENT_MODES)}, got '{agent_mode}'")
 
-    # AGENCY is not required for adapter mode — the HTTP server has no data-plane role.
     agency = os.getenv("AGENCY", "").strip().lower()
-    if not agency and agent_mode != "adapter":
+    if not agency:
         raise ConfigurationError("AGENCY is required and cannot be blank")
 
-    sender_agency = agency if agent_mode == "sender" else ""
+    sender_agency = agency if agent_mode in {"sender", "adapter"} else ""
     receiver_agency = agency if agent_mode == "receiver" else ""
 
     environment = os.getenv("ENVIRONMENT", "development").strip()
@@ -225,10 +224,10 @@ def load_config() -> AgentConfig:
 
     tenant = os.getenv("TENANT", "tts")
 
-    if agent_mode == "sender":
+    if agent_mode in {"sender", "adapter"}:
         sftp_endpoints, sftp_username, sftp_private_key = _load_sender_sftp_settings()
     else:
-        # adapter and receiver modes do not need SFTP credentials at startup.
+        # receiver mode does not need SFTP credentials at startup.
         sftp_endpoints = []
         sftp_username = ""
         sftp_private_key = ""
