@@ -48,16 +48,29 @@ def _run_sender(job_id: str) -> None:
     store = get_job_store()
     try:
         from redwood_dataagent.adapter.job_store import JobResult
-        from redwood_dataagent.agent import run_agent
+        from redwood_dataagent.agent import DEFAULT_ARCHIVE_FILE_NAME, SenderTransferArtifacts, run_agent
         from redwood_dataagent.config import load_config
 
         store.transition(job_id, JobStatus.RUNNING)
 
         config = load_config()
-        result_code = run_agent(config)
+        job_result: JobResult | None = None
+
+        def capture_result(artifacts: SenderTransferArtifacts) -> None:
+            nonlocal job_result
+            archive_file = next(
+                manifest_file for manifest_file in artifacts.manifest.files
+                if manifest_file.file_name == DEFAULT_ARCHIVE_FILE_NAME
+            )
+            job_result = JobResult(
+                checksum_sha256=archive_file.checksum_sha256,
+                file_size_bytes=archive_file.file_size_bytes,
+            )
+
+        result_code = run_agent(config, on_sender_success=capture_result)
 
         if result_code == 0:
-            result = JobResult(checksum_sha256="", file_size_bytes=0)
+            result = job_result or JobResult(checksum_sha256="", file_size_bytes=0)
             store.transition(job_id, JobStatus.SENT, result=result)
         else:
             store.transition(job_id, JobStatus.FAILED, error=f"Sender exited with code {result_code}")
