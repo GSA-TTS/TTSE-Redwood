@@ -1852,7 +1852,10 @@ def _run_sender_transfer_pipeline(
     )
 
 
-def _create_sender_workflow(config: AgentConfig) -> int:
+def _create_sender_workflow(
+    config: AgentConfig,
+    on_success: Callable[[SenderTransferArtifacts], None] | None = None,
+) -> int:
     """Execute sender-side transfer workflow.
 
     Implements: Extract → Policy → Compress → Manifest → Stage
@@ -2001,6 +2004,9 @@ def _create_sender_workflow(config: AgentConfig) -> int:
             outcome=EventOutcome.SUCCESS,
             details=pipeline_complete_details,
         )
+
+        if on_success is not None:
+            on_success(transfer_artifacts)
 
         return 0
 
@@ -2449,7 +2455,10 @@ def _create_receiver_workflow(config: AgentConfig) -> int:
         return 1
 
 
-def run_agent(config: AgentConfig) -> int:
+def run_agent(
+    config: AgentConfig,
+    on_sender_success: Callable[[SenderTransferArtifacts], None] | None = None,
+) -> int:
     """Run the agent workflow for the configured mode.
 
     Routes to sender or receiver workflow based on config.agent_mode.
@@ -2466,7 +2475,7 @@ def run_agent(config: AgentConfig) -> int:
         Exit code (0 for success, non-zero for failure).
     """
     if config.agent_mode in {"sender", "adapter"}:
-        return _create_sender_workflow(config)
+        return _create_sender_workflow(config, on_success=on_sender_success)
     elif config.agent_mode == "receiver":
         return _create_receiver_workflow(config)
     else:
