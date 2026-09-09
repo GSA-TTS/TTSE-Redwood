@@ -1,4 +1,4 @@
-.PHONY: help test test-cov lint lint-fix sonar-prepare sonar-setup sonar-local sonar-maintainability pre-pr
+.PHONY: help bootstrap ensure-dev-env test test-cov lint lint-fix sonar-prepare sonar-setup sonar-local sonar-maintainability pre-pr
 
 PYTHON ?= .venv/bin/python
 PYTEST ?= $(PYTHON) -m pytest
@@ -17,6 +17,7 @@ PYTEST_ARGS ?=
 
 help:
 	@echo "Available targets:"
+	@echo "  make bootstrap                 # Create .venv and install runtime+test deps"
 	@echo "  make test                      # Run all tests"
 	@echo "  make test TEST=tests/test_query_adapter.py"
 	@echo "  make test K='sender_workflow'  # Run tests matching -k expression"
@@ -31,22 +32,33 @@ help:
 	@echo "  make sonar-maintainability     # List open Sonar maintainability issues (code smells)"
 	@echo "  make pre-pr                    # Run lint and local Sonar scan"
 
+# One-time local setup for new machines/contributors.
+bootstrap:
+	python3 -m venv .venv
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -e '.[test]'
+
+# Ensure required runtime/test dependencies are present in the selected venv.
+ensure-dev-env:
+	@test -x "$(PYTHON)" || (echo "$(PYTHON) not found. Run 'make bootstrap' first." && exit 1)
+	@$(PYTHON) -c "import fastapi, pytest" >/dev/null 2>&1 || (echo "Installing missing dependencies into .venv ..." && $(PYTHON) -m pip install -e '.[test]')
+
 # Run pytest without coverage. Supports optional TEST, K, and PYTEST_ARGS vars.
-test:
+test: ensure-dev-env
 	$(PYTEST) $(TEST) $(if $(K),-k "$(K)") $(PYTEST_ARGS)
 
 # Run pytest with coverage. Supports optional TEST, K, and PYTEST_ARGS vars.
-test-cov:
+test-cov: ensure-dev-env
 	$(PYTEST) $(TEST) $(if $(K),-k "$(K)") \
 		--cov=$(COV_TARGET) --cov-report=term-missing --cov-report=xml:coverage/coverage.xml \
 		$(PYTEST_ARGS)
 
 # Lint code with Ruff (check only)
-lint:
+lint: ensure-dev-env
 	$(RUFF) check src tests
 
 # Auto-fix linting issues with Ruff
-lint-fix:
+lint-fix: ensure-dev-env
 	$(RUFF) check --fix src tests
 	$(RUFF) format src tests
 
