@@ -62,13 +62,10 @@ def _resolve_mode_storage_paths(
     environment: str,
 ) -> tuple[str, str, str, str]:
     """Build mode-specific bucket names and sender data directory."""
-    if agent_mode == "sender":
+    if agent_mode in {"sender", "adapter"}:
         sender_staging_bucket = build_sender_bucket(sender_agency, environment, StoragePurpose.STAGING)
         sender_data_directory = f"s3://{sender_staging_bucket}/{FileModeStoragePath.scan_prefix()}"
         return sender_staging_bucket, sender_data_directory, "", ""
-
-    if agent_mode == "adapter":
-        return "", "", "", ""
 
     receiver_landing_bucket = build_receiver_bucket(receiver_agency, environment, "landing")
     receiver_target_bucket = build_receiver_bucket(receiver_agency, environment, "target")
@@ -209,12 +206,11 @@ def load_config() -> AgentConfig:
     if agent_mode not in VALID_AGENT_MODES:
         raise ConfigurationError(f"AGENT_MODE must be one of {sorted(VALID_AGENT_MODES)}, got '{agent_mode}'")
 
-    # AGENCY is not required for adapter mode — the HTTP server has no data-plane role.
     agency = os.getenv("AGENCY", "").strip().lower()
-    if not agency and agent_mode != "adapter":
+    if not agency:
         raise ConfigurationError("AGENCY is required and cannot be blank")
 
-    sender_agency = agency if agent_mode == "sender" else ""
+    sender_agency = agency if agent_mode in {"sender", "adapter"} else ""
     receiver_agency = agency if agent_mode == "receiver" else ""
 
     environment = os.getenv("ENVIRONMENT", "development").strip()
@@ -225,10 +221,10 @@ def load_config() -> AgentConfig:
 
     tenant = os.getenv("TENANT", "tts")
 
-    if agent_mode == "sender":
+    if agent_mode in {"sender", "adapter"}:
         sftp_endpoints, sftp_username, sftp_private_key = _load_sender_sftp_settings()
     else:
-        # adapter and receiver modes do not need SFTP credentials at startup.
+        # receiver mode does not need SFTP credentials at startup.
         sftp_endpoints = []
         sftp_username = ""
         sftp_private_key = ""

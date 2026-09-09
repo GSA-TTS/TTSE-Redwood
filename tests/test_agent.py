@@ -1802,7 +1802,26 @@ class TestRunAgent:
         with patch("redwood_dataagent.agent._create_sender_workflow") as mock_sender:
             mock_sender.return_value = 0
             run_agent(config)
-            mock_sender.assert_called_once_with(config)
+            mock_sender.assert_called_once_with(config, on_success=None)
+
+    def test_run_agent_adapter_calls_sender_workflow(self) -> None:
+        """run_agent routes adapter mode job execution to sender workflow."""
+        config = self._make_config(mode="adapter")
+
+        with patch("redwood_dataagent.agent._create_sender_workflow") as mock_sender:
+            mock_sender.return_value = 0
+            run_agent(config)
+            mock_sender.assert_called_once_with(config, on_success=None)
+
+    def test_run_agent_passes_sender_success_callback(self) -> None:
+        """run_agent forwards sender success callback to sender workflow."""
+        config = self._make_config(mode="sender")
+        callback = MagicMock()
+
+        with patch("redwood_dataagent.agent._create_sender_workflow") as mock_sender:
+            mock_sender.return_value = 0
+            run_agent(config, on_sender_success=callback)
+            mock_sender.assert_called_once_with(config, on_success=callback)
 
     def test_run_agent_receiver_calls_receiver_workflow(self) -> None:
         """run_agent routes receiver mode to receiver workflow."""
