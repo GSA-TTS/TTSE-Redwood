@@ -1,4 +1,4 @@
-# ttse-redwood
+# fpdf-sync-adapter
 
 Repository for the TTSE Redwood Data Agent.
 
